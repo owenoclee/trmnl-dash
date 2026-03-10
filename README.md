@@ -15,7 +15,7 @@ A [Typst](https://typst.app)-based renderer for the [TRMNL](https://usetrmnl.com
 ## Prerequisites
 
 ```bash
-brew install typst
+brew install typst go
 # Xcode command line tools for swiftc (already present on most Macs)
 xcode-select --install
 ```
@@ -26,8 +26,40 @@ xcode-select --install
 make build      # compile dashboard.typ → dashboard.png at 1872×1404
 make preview    # build + open in true-size e-ink simulator (macOS only)
 make open       # build + open the raw PNG in Preview
-make clean      # remove dashboard.png and .viewer binary
+make clean      # remove dashboard.png, .viewer binary, and server binary
 ```
+
+## BYOS server
+
+`server.go` implements the [TRMNL BYOS](https://docs.trmnl.com/go/diy/byos) (Bring Your Own Server) protocol so the physical device can pull content directly from your machine.
+
+It handles all three endpoints the firmware expects:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/setup` | One-time device provisioning - issues an API key |
+| `GET /api/display` | Main poll - compiles `dashboard.typ` on demand and returns the image URL |
+| `POST /api/log` | Device diagnostics - logs payload and returns 204 |
+
+### Running
+
+```bash
+make serve BASE_URL=http://192.168.1.100:8080
+```
+
+`BASE_URL` must be reachable from the device on your local network. Find your Mac's IP with `ipconfig getifaddr en0`.
+
+Optional overrides:
+
+```bash
+make serve BASE_URL=http://192.168.1.100:8080 ADDR=:9090 REFRESH_RATE=900
+```
+
+### Device setup
+
+In the TRMNL app/firmware, point the device at your server's IP instead of the TRMNL cloud. On first boot the device calls `/api/setup`, receives an API key, and stores it. Subsequent polls hit `/api/display` - the server compiles a fresh PNG and returns its URL; the device downloads and renders it, then sleeps for `refresh_rate` seconds.
+
+Device registrations are persisted to `devices.json` (gitignored).
 
 ## Typst page setup
 
@@ -72,7 +104,7 @@ make preview ZOOM=50
 
 ## Next steps / roadmap
 
-- [ ] Web server with `/api/display` endpoint that compiles `.typ` on request
+- [x] Web server with `/api/display` endpoint that compiles `.typ` on request
 - [ ] Dynamic content injection via `typst compile --input key=value`
 - [ ] Real content widgets: weather, calendar, tasks, etc.
 - [ ] Post-process output to true 4-bit grayscale (device dithers anyway)
