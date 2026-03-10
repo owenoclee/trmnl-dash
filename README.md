@@ -44,20 +44,18 @@ It handles all three endpoints the firmware expects:
 ### Running
 
 ```bash
-make serve BASE_URL=http://192.168.1.100:8080
+make serve
 ```
 
-`BASE_URL` must be reachable from the device on your local network. Find your Mac's IP with `ipconfig getifaddr en0`.
-
-Optional overrides:
+The server derives its own URL from each incoming request's `Host` header, so no address configuration is needed. Optional overrides:
 
 ```bash
-make serve BASE_URL=http://192.168.1.100:8080 ADDR=:9090 REFRESH_RATE=900
+make serve ADDR=:9090 REFRESH_RATE=900
 ```
 
 ### Device setup
 
-In the TRMNL app/firmware, point the device at your server's IP instead of the TRMNL cloud. On first boot the device calls `/api/setup`, receives an API key, and stores it. Subsequent polls hit `/api/display` - the server compiles a fresh PNG and returns its URL; the device downloads and renders it, then sleeps for `refresh_rate` seconds.
+In the TRMNL app/firmware, point the device at your Mac's local IP (e.g. `http://192.168.1.100:8080`) instead of the TRMNL cloud. Find it with `ipconfig getifaddr en0`. On first boot the device calls `/api/setup`, receives an API key, and stores it. Subsequent polls hit `/api/display` - the server compiles a fresh PNG and returns its URL; the device downloads and renders it, then sleeps for `refresh_rate` seconds.
 
 Device registrations are persisted to `devices.json` (gitignored).
 

@@ -31,11 +31,9 @@ $(SERVER): server.go go.mod
 server: $(SERVER)
 
 # Build the PNG and start the BYOS server.
-# BASE_URL is required: make serve BASE_URL=http://192.168.1.100:8080
-# Optional: make serve BASE_URL=... ADDR=:9090 REFRESH_RATE=900
+# Optional: make serve ADDR=:9090 REFRESH_RATE=900
 serve: build $(SERVER)
 	./$(SERVER) \
-		--base-url $(BASE_URL) \
 		$(if $(ADDR),--addr $(ADDR),) \
 		$(if $(REFRESH_RATE),--refresh-rate $(REFRESH_RATE),)
 

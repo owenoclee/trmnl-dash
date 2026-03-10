@@ -97,14 +97,26 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// baseURL constructs the server's base URL from the incoming request so we
+// never need to hard-code or configure it.
+func baseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
 // -- handlers --
 
-func handleSetup(w http.ResponseWriter, r *http.Request, baseURL string) {
+func handleSetup(w http.ResponseWriter, r *http.Request) {
 	mac := strings.ToLower(r.Header.Get("ID"))
 	if mac == "" {
 		http.Error(w, "missing ID header", http.StatusBadRequest)
 		return
 	}
+
+	base := baseURL(r)
 
 	registryMu.Lock()
 	defer registryMu.Unlock()
@@ -115,7 +127,7 @@ func handleSetup(w http.ResponseWriter, r *http.Request, baseURL string) {
 			"status":      200,
 			"api_key":     d.APIKey,
 			"friendly_id": d.FriendlyID,
-			"image_url":   baseURL + "/dashboard.png",
+			"image_url":   base + "/dashboard.png",
 			"filename":    "welcome",
 		})
 		return
@@ -136,12 +148,12 @@ func handleSetup(w http.ResponseWriter, r *http.Request, baseURL string) {
 		"status":      200,
 		"api_key":     d.APIKey,
 		"friendly_id": d.FriendlyID,
-		"image_url":   baseURL + "/dashboard.png",
+		"image_url":   base + "/dashboard.png",
 		"filename":    "welcome",
 	})
 }
 
-func handleDisplay(w http.ResponseWriter, r *http.Request, baseURL string, refreshRate int, typstSrc, pngOut string) {
+func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, typstSrc, pngOut string) {
 	token := r.Header.Get("Access-Token")
 
 	registryMu.Lock()
@@ -174,7 +186,7 @@ func handleDisplay(w http.ResponseWriter, r *http.Request, baseURL string, refre
 		return
 	}
 
-	imageURL := fmt.Sprintf("%s/dashboard.png?t=%d", baseURL, time.Now().Unix())
+	imageURL := fmt.Sprintf("%s/dashboard.png?t=%d", baseURL(r), time.Now().Unix())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":          0,
 		"image_url":       imageURL,
@@ -203,17 +215,12 @@ func handleLog(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	addr        := flag.String("addr", ":8080", "Listen address")
-	baseURL     := flag.String("base-url", "", "Public base URL the device will use to fetch the image (e.g. http://192.168.1.100:8080)")
 	refreshRate := flag.Int("refresh-rate", 1800, "Seconds between device polls")
 	typstSrc    := flag.String("src", "dashboard.typ", "Typst source file")
 	pngOut      := flag.String("out", "dashboard.png", "PNG output path")
 	dp          := flag.String("devices", "devices.json", "Device registry file")
 	flag.Parse()
 
-	if *baseURL == "" {
-		log.Fatal("--base-url is required (e.g. http://192.168.1.100:8080)")
-	}
-	*baseURL = strings.TrimRight(*baseURL, "/")
 	devicesPath = *dp
 
 	rand.Seed(time.Now().UnixNano()) //nolint:staticcheck
@@ -221,11 +228,9 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
-		handleSetup(w, r, *baseURL)
-	})
+	mux.HandleFunc("GET /api/setup", handleSetup)
 	mux.HandleFunc("GET /api/display", func(w http.ResponseWriter, r *http.Request) {
-		handleDisplay(w, r, *baseURL, *refreshRate, *typstSrc, *pngOut)
+		handleDisplay(w, r, *refreshRate, *typstSrc, *pngOut)
 	})
 	mux.HandleFunc("POST /api/log", handleLog)
 	mux.HandleFunc("GET /dashboard.png", func(w http.ResponseWriter, r *http.Request) {
@@ -233,10 +238,9 @@ func main() {
 	})
 
 	log.Printf("TRMNL BYOS server")
-	log.Printf("  addr:          %s", *addr)
-	log.Printf("  base-url:      %s", *baseURL)
-	log.Printf("  refresh-rate:  %ds", *refreshRate)
-	log.Printf("  devices file:  %s", devicesPath)
+	log.Printf("  addr:           %s", *addr)
+	log.Printf("  refresh-rate:   %ds", *refreshRate)
+	log.Printf("  devices file:   %s", devicesPath)
 	log.Printf("  devices loaded: %d", len(byMAC))
 
 	log.Fatal(http.ListenAndServe(*addr, mux))
