@@ -400,9 +400,6 @@ func main() {
 		if err := compile(*typstSrc, *pngOut, weatherInputs(*lat, *lon, *location)); err != nil {
 			log.Fatalf("compile: %v", err)
 		}
-		if err := exec.Command("open", *pngOut).Run(); err != nil {
-			log.Fatalf("open: %v", err)
-		}
 		return
 	}
 
