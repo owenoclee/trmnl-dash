@@ -233,6 +233,35 @@ func compile(src, out string, inputs map[string]string) error {
 	return cmd.Run()
 }
 
+// weatherInputs fetches weather and returns a map of --input key=value pairs
+// ready to pass to compile. Returns an empty map if location is not configured
+// or the fetch fails.
+func weatherInputs(lat, lon float64, location string) map[string]string {
+	inputs := map[string]string{}
+	if location != "" {
+		inputs["location"] = location
+	}
+	if math.IsNaN(lat) || math.IsNaN(lon) {
+		return inputs
+	}
+	wd, err := fetchWeather(lat, lon)
+	if err != nil {
+		log.Printf("[weather] unavailable: %v", err)
+		return inputs
+	}
+	hourlyStrs := make([]string, len(wd.Hourly))
+	for i, t := range wd.Hourly {
+		hourlyStrs[i] = fmt.Sprintf("%.1f", t)
+	}
+	inputs["temp"]      = fmt.Sprintf("%d", wd.Temp)
+	inputs["temp-min"]  = fmt.Sprintf("%d", wd.TempMin)
+	inputs["temp-max"]  = fmt.Sprintf("%d", wd.TempMax)
+	inputs["wind"]      = fmt.Sprintf("%d", wd.WindMPH)
+	inputs["condition"] = wd.Condition
+	inputs["hourly"]    = strings.Join(hourlyStrs, ",")
+	return inputs
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -322,32 +351,7 @@ func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, typs
 		r.Header.Get("FW-Version"),
 	)
 
-	inputs := map[string]string{}
-	if location != "" {
-		inputs["location"] = location
-	}
-	var err error
-	var wd *weatherData
-	if !math.IsNaN(lat) && !math.IsNaN(lon) {
-		wd, err = fetchWeather(lat, lon)
-		if err != nil {
-			log.Printf("[display] weather unavailable: %v", err)
-		}
-	}
-	if wd != nil {
-		hourlyStrs := make([]string, len(wd.Hourly))
-		for i, t := range wd.Hourly {
-			hourlyStrs[i] = fmt.Sprintf("%.1f", t)
-		}
-		inputs["temp"] = fmt.Sprintf("%d", wd.Temp)
-		inputs["temp-min"] = fmt.Sprintf("%d", wd.TempMin)
-		inputs["temp-max"] = fmt.Sprintf("%d", wd.TempMax)
-		inputs["wind"] = fmt.Sprintf("%d", wd.WindMPH)
-		inputs["condition"] = wd.Condition
-		inputs["hourly"] = strings.Join(hourlyStrs, ",")
-	}
-
-	if err := compile(typstSrc, pngOut, inputs); err != nil {
+	if err := compile(typstSrc, pngOut, weatherInputs(lat, lon, location)); err != nil {
 		log.Printf("[display] compile error: %v", err)
 		writeJSON(w, http.StatusOK, map[string]any{"status": 500})
 		return
@@ -389,7 +393,18 @@ func main() {
 	lat         := flag.Float64("lat", envFloat("TRMNL_LAT"), "Weather latitude (or set TRMNL_LAT)")
 	lon         := flag.Float64("lon", envFloat("TRMNL_LON"), "Weather longitude (or set TRMNL_LON)")
 	location    := flag.String("location", os.Getenv("TRMNL_LOCATION"), "Location name shown in footer (or set TRMNL_LOCATION)")
+	once        := flag.Bool("once", false, "Fetch weather, compile, and open the PNG — then exit (useful for previewing)")
 	flag.Parse()
+
+	if *once {
+		if err := compile(*typstSrc, *pngOut, weatherInputs(*lat, *lon, *location)); err != nil {
+			log.Fatalf("compile: %v", err)
+		}
+		if err := exec.Command("open", *pngOut).Run(); err != nil {
+			log.Fatalf("open: %v", err)
+		}
+		return
+	}
 
 	devicesPath = *dp
 

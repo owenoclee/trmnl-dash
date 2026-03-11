@@ -20,9 +20,10 @@ build:
 $(VIEWER): viewer.swift
 	swiftc -o $(VIEWER) viewer.swift
 
-# Zoom is auto-detected from the screen at runtime.
-# Override if needed: make preview ZOOM=50
-preview: build $(VIEWER)
+# Live preview: fetch real weather, compile, open in e-ink simulator.
+# Zoom is auto-detected from the screen; override with ZOOM=56 if needed.
+preview: $(SERVER) $(VIEWER)
+	./$(SERVER) --once --out $(OUT)
 	./$(VIEWER) $(OUT) $(ZOOM)
 
 open: build
