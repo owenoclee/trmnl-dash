@@ -81,7 +81,9 @@ type weatherResponse struct {
 		WindSpeed   float64 `json:"wind_speed_10m"`
 	} `json:"current"`
 	Hourly struct {
-		Temperature []float64 `json:"temperature_2m"`
+		Temperature      []float64 `json:"temperature_2m"`
+		WindSpeed        []float64 `json:"wind_speed_10m"`
+		PrecipProbability []float64 `json:"precipitation_probability"`
 	} `json:"hourly"`
 	Daily struct {
 		TempMax []float64 `json:"temperature_2m_max"`
@@ -90,13 +92,15 @@ type weatherResponse struct {
 }
 
 type weatherData struct {
-	Temp      int
-	TempMin   int
-	TempMax   int
-	WindMPH   int
-	Condition string
-	Hourly    []float64 // 24 values, one per hour
-	FetchedAt time.Time
+	Temp         int
+	TempMin      int
+	TempMax      int
+	WindMPH      int
+	Condition    string
+	HourlyTemp   []float64
+	HourlyWind   []float64
+	HourlyPrecip []float64
+	FetchedAt    time.Time
 }
 
 var (
@@ -116,7 +120,7 @@ func fetchWeather(lat, lon float64) (*weatherData, error) {
 		"https://api.open-meteo.com/v1/forecast"+
 			"?latitude=%.4f&longitude=%.4f"+
 			"&current=temperature_2m,weather_code,wind_speed_10m"+
-			"&hourly=temperature_2m"+
+			"&hourly=temperature_2m,wind_speed_10m,precipitation_probability"+
 			"&daily=temperature_2m_max,temperature_2m_min"+
 			"&wind_speed_unit=mph"+
 			"&forecast_days=1&timezone=auto",
@@ -134,17 +138,21 @@ func fetchWeather(lat, lon float64) (*weatherData, error) {
 		return nil, fmt.Errorf("weather decode: %w", err)
 	}
 
-	hourly := wr.Hourly.Temperature
-	if len(hourly) > 24 {
-		hourly = hourly[:24]
+	cap24 := func(s []float64) []float64 {
+		if len(s) > 24 {
+			return s[:24]
+		}
+		return s
 	}
 
 	wd := &weatherData{
-		Temp:      int(math.Round(wr.Current.Temperature)),
-		WindMPH:   int(math.Round(wr.Current.WindSpeed)),
-		Condition: wmoCondition(wr.Current.WeatherCode),
-		Hourly:    hourly,
-		FetchedAt: time.Now(),
+		Temp:         int(math.Round(wr.Current.Temperature)),
+		WindMPH:      int(math.Round(wr.Current.WindSpeed)),
+		Condition:    wmoCondition(wr.Current.WeatherCode),
+		HourlyTemp:   cap24(wr.Hourly.Temperature),
+		HourlyWind:   cap24(wr.Hourly.WindSpeed),
+		HourlyPrecip: cap24(wr.Hourly.PrecipProbability),
+		FetchedAt:    time.Now(),
 	}
 	if len(wr.Daily.TempMax) > 0 {
 		wd.TempMax = int(math.Round(wr.Daily.TempMax[0]))
@@ -222,7 +230,7 @@ func randString(n int) string {
 func compile(src, out string, inputs map[string]string) error {
 	compileMu.Lock()
 	defer compileMu.Unlock()
-	args := []string{"compile", "--format", "png", "--ppi", "227"}
+	args := []string{"compile", "--format", "png", "--ppi", "227", "--pages", "1"}
 	for k, v := range inputs {
 		args = append(args, "--input", k+"="+v)
 	}
@@ -249,16 +257,21 @@ func weatherInputs(lat, lon float64, location string) map[string]string {
 		log.Printf("[weather] unavailable: %v", err)
 		return inputs
 	}
-	hourlyStrs := make([]string, len(wd.Hourly))
-	for i, t := range wd.Hourly {
-		hourlyStrs[i] = fmt.Sprintf("%.1f", t)
+	joinFloats := func(vals []float64) string {
+		s := make([]string, len(vals))
+		for i, v := range vals {
+			s[i] = fmt.Sprintf("%.1f", v)
+		}
+		return strings.Join(s, ",")
 	}
-	inputs["temp"]      = fmt.Sprintf("%d", wd.Temp)
-	inputs["temp-min"]  = fmt.Sprintf("%d", wd.TempMin)
-	inputs["temp-max"]  = fmt.Sprintf("%d", wd.TempMax)
-	inputs["wind"]      = fmt.Sprintf("%d", wd.WindMPH)
-	inputs["condition"] = wd.Condition
-	inputs["hourly"]    = strings.Join(hourlyStrs, ",")
+	inputs["temp"]          = fmt.Sprintf("%d", wd.Temp)
+	inputs["temp-min"]      = fmt.Sprintf("%d", wd.TempMin)
+	inputs["temp-max"]      = fmt.Sprintf("%d", wd.TempMax)
+	inputs["wind"]          = fmt.Sprintf("%d", wd.WindMPH)
+	inputs["condition"]     = wd.Condition
+	inputs["hourly-temp"]   = joinFloats(wd.HourlyTemp)
+	inputs["hourly-wind"]   = joinFloats(wd.HourlyWind)
+	inputs["hourly-precip"] = joinFloats(wd.HourlyPrecip)
 	return inputs
 }
 
