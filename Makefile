@@ -1,6 +1,10 @@
 # TRMNL ePaper Dashboard - Build System
 # Target: 1872x1404 PNG @ 227 PPI (10.3" display)
 
+# Load .env if present (copy .env.example to .env and fill in your values)
+-include .env
+export
+
 PPI    := 227
 SRC    := dashboard.typ
 OUT    := dashboard.png

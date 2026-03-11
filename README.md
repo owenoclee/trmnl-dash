@@ -103,7 +103,7 @@ make preview ZOOM=50
 ## Next steps / roadmap
 
 - [x] Web server with `/api/display` endpoint that compiles `.typ` on request
-- [ ] Dynamic content injection via `typst compile --input key=value`
-- [ ] Real content widgets: weather, calendar, tasks, etc.
+- [x] Dynamic content injection via `typst compile --input key=value`
+- [x] Real content widgets: weather (Open-Meteo — temp, high/low, wind, hourly chart)
 - [ ] Post-process output to true 4-bit grayscale (device dithers anyway)
 - [ ] Hot-reload in preview: watch `dashboard.typ` and reopen on change
