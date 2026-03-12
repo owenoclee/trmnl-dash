@@ -34,13 +34,6 @@ body {
 }
 body.debug .page::before { display: block; }
 
-.conditions {
-  display: flex;
-  align-items: center;
-  gap: 63px;
-  margin-bottom: 44px;
-}
-
 /* 64pt at 227ppi */
 .temp {
   font-size: 202px;
@@ -48,6 +41,13 @@ body.debug .page::before { display: block; }
   line-height: 1;
   white-space: nowrap;
   letter-spacing: -3px;
+}
+
+.conditions {
+  display: flex;
+  align-items: center;
+  gap: 63px;
+  margin-bottom: 44px;
 }
 
 /* 20pt */
@@ -68,8 +68,211 @@ body.debug .page::before { display: block; }
     </div>
   </div>
 
-  {{.ChartSVG}}
+  <div class="charts"></div>
 
 </div>
+
+<!-- D3 library (vendored, inlined by Go at render time) -->
+<script>{{.D3Source}}</script>
+
+<!-- Chart data injected by Go -->
+<script>const DATA = {{.DataJSON}};</script>
+
+<!-- Chart rendering — pure presentation, no data fetching -->
+<script>
+(function () {
+  // ---------------------------------------------------------------------------
+  // Physical dimensions — all derived from the original Typst design.
+  // 1pt = 227/72 ≈ 3.153px  (227ppi display, 72pt/in)
+  // ---------------------------------------------------------------------------
+  const PT = 227 / 72;
+
+  const CONTENT_W  = 1872 - 2 * 102;         // 1668px  (page − 2 × margin)
+  const ICON_COL   = 18 * PT;                 // icon column width
+  const ICON_GAP   = 8  * PT;                 // gap between icon and labels
+  const LABEL_W    = 22 * PT;                 // y-axis label column
+  const CHART_W    = CONTENT_W - ICON_COL - ICON_GAP - LABEL_W;
+  const CHART_H    = 28 * PT;                 // chart height
+  const CHART_GAP  = 20 * PT;                 // vertical gap between charts
+  const H_EXT      = LABEL_W / 2;             // h-line left overhang
+  const V_EXT      = 14 * PT;                 // v-line overhang below last chart
+  const CHART_X0   = ICON_COL + ICON_GAP + LABEL_W;  // chart area left edge
+  const N_DAY      = 16;                      // data points: 7am–10pm inclusive
+  const LABEL_FS   = 8  * PT;                 // label font size
+  const GRID_SW    = 0.4 * PT;                // grid stroke width
+
+  // ---------------------------------------------------------------------------
+  // Colour palette — restricted to the TRMNL 16-shade grayscale.
+  // Shades run from ~sRGB 40 (black) to ~sRGB 215 (white) in 16 steps.
+  // #dddddd (221) is one of the 16 uniform steps (0, 17, 34 … 221, 238, 255).
+  // ---------------------------------------------------------------------------
+  const FILL_COLOR = '#dddddd';
+  const FONT       = "Georgia, 'Times New Roman', serif";
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+  function sliceDay(arr) {
+    return arr.slice(7, 23); // 7am–10pm, 16 points
+  }
+
+  // ---------------------------------------------------------------------------
+  // Icons — drawn with SVG primitives, centered at (cx, cy)
+  // ---------------------------------------------------------------------------
+  function drawIcon(g, type, cx, cy) {
+    const sw = 1.5 * PT;
+    if (type === 'therm') {
+      const r = 4 * PT, stemH = 13 * PT;
+      g.append('line')
+        .attr('x1', cx).attr('y1', cy - r - stemH)
+        .attr('x2', cx).attr('y2', cy - r)
+        .attr('stroke', 'black').attr('stroke-width', sw)
+        .attr('stroke-linecap', 'round');
+      g.append('circle')
+        .attr('cx', cx).attr('cy', cy).attr('r', r)
+        .attr('fill', 'black');
+
+    } else if (type === 'wind') {
+      const gap = 4 * PT;
+      [14 * PT, 10 * PT, 6 * PT].forEach((len, i) => {
+        const ly = cy - gap + i * gap;
+        g.append('line')
+          .attr('x1', cx - len / 2).attr('y1', ly)
+          .attr('x2', cx + len / 2).attr('y2', ly)
+          .attr('stroke', 'black').attr('stroke-width', sw)
+          .attr('stroke-linecap', 'round');
+      });
+
+    } else if (type === 'rain') {
+      const tw = 12 * PT, th = 14 * PT;
+      g.append('polygon')
+        .attr('points', `${cx - tw/2},${cy - th/2} ${cx + tw/2},${cy - th/2} ${cx},${cy + th/2}`)
+        .attr('fill', 'black');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sparkline — one chart row
+  // ---------------------------------------------------------------------------
+  function drawSparkline(svg, series, chartIndex) {
+    const { data, unit, yMin, yMax, icon } = series;
+    const cy = chartIndex * (CHART_H + CHART_GAP); // top of this chart
+
+    const xScale = d3.scaleLinear()
+      .domain([0, data.length - 1])
+      .range([CHART_X0, CHART_X0 + CHART_W]);
+
+    const yScale = d3.scaleLinear()
+      .domain([yMin ?? d3.min(data), yMax ?? d3.max(data)])
+      .range([cy + CHART_H, cy]);
+
+    const dMin = yMin ?? d3.min(data);
+    const dMax = yMax ?? d3.max(data);
+
+    // 1 — filled area
+    svg.append('path')
+      .datum(data)
+      .attr('fill', FILL_COLOR)
+      .attr('stroke', 'none')
+      .attr('d', d3.area()
+        .x((d, i) => xScale(i))
+        .y0(cy + CHART_H)
+        .y1((d) => yScale(d))
+        .curve(d3.curveMonotoneX)
+      );
+
+    // 2 — data line (above fill, below grid)
+    svg.append('path')
+      .datum(data)
+      .attr('fill', 'none')
+      .attr('stroke', 'black')
+      .attr('stroke-width', 1 * PT)
+      .attr('stroke-linejoin', 'round')
+      .attr('stroke-linecap', 'round')
+      .attr('d', d3.line()
+        .x((d, i) => xScale(i))
+        .y((d) => yScale(d))
+        .curve(d3.curveMonotoneX)
+      );
+
+    // 3 — horizontal grid lines (top / mid / bottom)
+    //     white + mix-blend-mode:difference → always visible regardless of bg
+    [0, 0.5, 1].forEach(frac => {
+      const gy = cy + CHART_H * frac;
+      svg.append('line')
+        .attr('x1', CHART_X0 - H_EXT).attr('y1', gy)
+        .attr('x2', CHART_X0 + CHART_W).attr('y2', gy)
+        .attr('stroke', 'white')
+        .attr('stroke-width', GRID_SW)
+        .attr('stroke-dasharray', '8,6')
+        .style('mix-blend-mode', 'difference');
+    });
+
+    // 4 — y-axis labels: right-aligned, centered on their h-line
+    const lx = CHART_X0 - H_EXT - 5;
+    [
+      { val: dMax, y: cy },
+      { val: dMin, y: cy + CHART_H },
+    ].forEach(({ val, y }) => {
+      svg.append('text')
+        .attr('x', lx).attr('y', y)
+        .attr('text-anchor', 'end')
+        .attr('dominant-baseline', 'middle')
+        .attr('font-size', LABEL_FS)
+        .attr('font-family', FONT)
+        .text(`${Math.round(val)}${unit}`);
+    });
+
+    // 5 — icon
+    drawIcon(svg, icon, ICON_COL / 2, cy + CHART_H / 2);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Main render
+  // ---------------------------------------------------------------------------
+  const series = [
+    { data: sliceDay(DATA.hourlyTemp),   unit: '°C',  icon: 'therm' },
+    { data: sliceDay(DATA.hourlyWind),   unit: ' mph', icon: 'wind'  },
+    { data: sliceDay(DATA.hourlyPrecip), unit: '%',   icon: 'rain',  yMin: 0, yMax: 100 },
+  ];
+
+  const CHARTS_H = 3 * CHART_H + 2 * CHART_GAP;
+  const SVG_H    = CHARTS_H + V_EXT + LABEL_FS + 4;
+
+  const svg = d3.select('.charts')
+    .append('svg')
+    .attr('width', CONTENT_W)
+    .attr('height', SVG_H)
+    .style('display', 'block')
+    .style('overflow', 'visible');
+
+  series.forEach((s, i) => drawSparkline(svg, s, i));
+
+  // Shared vertical time lines spanning all three charts
+  const TIME_STEP  = CHART_W / (N_DAY - 1);
+  const LINE_BOT   = CHARTS_H + V_EXT - LABEL_FS; // stop before label area
+  const LABEL_Y    = CHARTS_H + V_EXT;
+
+  [[0, '7'], [5, '12'], [10, '17'], [15, '22']].forEach(([idx, label]) => {
+    const vx = CHART_X0 + idx * TIME_STEP;
+
+    svg.append('line')
+      .attr('x1', vx).attr('y1', 0)
+      .attr('x2', vx).attr('y2', LINE_BOT)
+      .attr('stroke', 'white')
+      .attr('stroke-width', GRID_SW)
+      .attr('stroke-dasharray', '8,6')
+      .style('mix-blend-mode', 'difference');
+
+    svg.append('text')
+      .attr('x', vx + 4).attr('y', LABEL_Y)
+      .attr('font-size', LABEL_FS)
+      .attr('font-family', FONT)
+      .text(label);
+  });
+
+})();
+</script>
+
 </body>
 </html>

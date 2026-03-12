@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -20,6 +21,9 @@ import (
 	"time"
 )
 
+//go:embed d3.v7.min.js
+var d3JS string
+
 // Device represents a registered TRMNL device.
 type Device struct {
 	MAC            string    `json:"mac"`
@@ -32,7 +36,6 @@ type Device struct {
 	FWVersion      string    `json:"fw_version,omitempty"`
 }
 
-// registry holds all registered devices keyed by MAC address.
 var (
 	registryMu  sync.RWMutex
 	byMAC       = make(map[string]*Device)
@@ -201,206 +204,17 @@ func wmoCondition(code int) string {
 	}
 }
 
-// -- dashboard dimensions (physical: 1872×1404 @ 227ppi) --
+// -- dashboard template data --
 //
-// All values derived from the original Typst design.
-// 1pt = 227/72 ≈ 3.153px
-const (
-	ptPx = 227.0 / 72.0 // px per typographic point
+// Go's job: fetch data, serialise to JSON, hand off to the template.
+// All chart rendering logic lives in dashboard.html / JS.
 
-	pageW   = 1872.0
-	pageH   = 1404.0
-	marginX = 102.0 // 0.45in × 227ppi
-	marginY = 91.0  // 0.40in × 227ppi
-	contentW = pageW - 2*marginX // 1668px
-
-	iconCol  = 18 * ptPx // ~56.8px  — icon column
-	iconGap  = 8 * ptPx  // ~25.2px  — gap between icon and labels
-	labelW   = 22 * ptPx // ~69.4px  — y-axis label column
-	chartW   = contentW - iconCol - iconGap - labelW // ~1516.6px
-	chartH   = 28 * ptPx // ~88.3px  — chart height
-	chartGap = 20 * ptPx // ~63.1px  — vertical gap between charts
-	hExt     = labelW / 2 // h-line extension to the left
-	vExt     = 14 * ptPx // ~44.1px  — v-line extension below last chart
-
-	nDay    = 16 // 7am–10pm inclusive
-	dayStep = chartW / (nDay - 1)
-
-	labelFontSize = 8 * ptPx  // ~25.2px
-	gridStrokeW   = 0.4 * ptPx // ~1.3px
-
-	// x offset to chart data area
-	chartX0 = iconCol + iconGap + labelW
-)
-
-// -- SVG chart generation --
-
-type chartSeries struct {
-	data           []float64
-	unit           string
-	yMin, yMax     float64
-	autoMin, autoMax bool
-	icon           string // "therm" | "wind" | "rain"
+// chartJSON is the data contract passed to the JS layer.
+type chartJSON struct {
+	HourlyTemp   []float64 `json:"hourlyTemp"`
+	HourlyWind   []float64 `json:"hourlyWind"`
+	HourlyPrecip []float64 `json:"hourlyPrecip"`
 }
-
-func sliceDay(arr []float64) []float64 {
-	if len(arr) >= 23 {
-		return arr[7:23] // 7am–10pm, 16 points
-	}
-	return arr
-}
-
-func buildChartSVG(hourlyTemp, hourlyWind, hourlyPrecip []float64) template.HTML {
-	series := []chartSeries{
-		{sliceDay(hourlyTemp),   "°C",  0, 0,   true,  true,  "therm"},
-		{sliceDay(hourlyWind),   "mph", 0, 0,   true,  true,  "wind"},
-		{sliceDay(hourlyPrecip), "%",   0, 100, false, false, "rain"},
-	}
-
-	chartsH := 3*chartH + 2*chartGap
-	svgH := chartsH + vExt + labelFontSize + 4
-
-	var b strings.Builder
-	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%.2f" height="%.2f" style="display:block;overflow:visible">`,
-		contentW, svgH)
-
-	gridStyle := `stroke="white" stroke-dasharray="8,6" style="mix-blend-mode:difference"`
-
-	for ci, s := range series {
-		data := s.data
-		n := len(data)
-		if n < 2 {
-			continue
-		}
-		step := chartW / float64(n-1)
-		cy := float64(ci) * (chartH + chartGap) // chart top y
-
-		// Compute data range
-		dMin, dMax := s.yMin, s.yMax
-		if s.autoMin {
-			dMin = data[0]
-			for _, v := range data[1:] {
-				if v < dMin {
-					dMin = v
-				}
-			}
-		}
-		if s.autoMax {
-			dMax = data[0]
-			for _, v := range data[1:] {
-				if v > dMax {
-					dMax = v
-				}
-			}
-		}
-		dRng := dMax - dMin
-		if dRng == 0 {
-			dRng = 1
-		}
-		norm := func(v float64) float64 {
-			n := (v - dMin) / dRng
-			if n < 0 {
-				return 0
-			}
-			if n > 1 {
-				return 1
-			}
-			return n
-		}
-
-		// Compute data points
-		type vec2 struct{ x, y float64 }
-		pts := make([]vec2, n)
-		for i, v := range data {
-			pts[i] = vec2{chartX0 + float64(i)*step, cy + chartH*(1-norm(v))}
-		}
-
-		// 1. Fill polygon
-		fillPts := make([]string, n+2)
-		for i, p := range pts {
-			fillPts[i] = fmt.Sprintf("%.1f,%.1f", p.x, p.y)
-		}
-		fillPts[n] = fmt.Sprintf("%.1f,%.1f", chartX0+chartW, cy+chartH)
-		fillPts[n+1] = fmt.Sprintf("%.1f,%.1f", chartX0, cy+chartH)
-		fmt.Fprintf(&b, `<polygon points="%s" fill="#e2e2e2" stroke="none"/>`,
-			strings.Join(fillPts, " "))
-
-		// 2. Data line (on top of fill, beneath grid)
-		linePts := make([]string, n)
-		for i, p := range pts {
-			linePts[i] = fmt.Sprintf("%.1f,%.1f", p.x, p.y)
-		}
-		fmt.Fprintf(&b, `<polyline points="%s" fill="none" stroke="black" stroke-width="%.1f" stroke-linejoin="round" stroke-linecap="round"/>`,
-			strings.Join(linePts, " "), 1.0*ptPx)
-
-		// 3. Horizontal grid lines (difference blend — visible over both fill and line)
-		for _, frac := range []float64{0, 0.5, 1} {
-			gy := cy + chartH*frac
-			fmt.Fprintf(&b, `<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke-width="%.1f" %s/>`,
-				chartX0-hExt, gy, chartX0+chartW, gy, gridStrokeW, gridStyle)
-		}
-
-		// 4. Y-axis labels (right of label area, centered on their h-line)
-		lx := chartX0 - hExt - 5
-		maxStr := fmt.Sprintf("%d%s", int(math.Round(dMax)), s.unit)
-		minStr := fmt.Sprintf("%d%s", int(math.Round(dMin)), s.unit)
-		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="end" dominant-baseline="middle" font-size="%.1f" font-family="Georgia,serif" fill="black">%s</text>`,
-			lx, cy, labelFontSize, maxStr)
-		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="end" dominant-baseline="middle" font-size="%.1f" font-family="Georgia,serif" fill="black">%s</text>`,
-			lx, cy+chartH, labelFontSize, minStr)
-
-		// 5. Icon (centered in icon column, vertically centered on chart)
-		icx := iconCol / 2
-		icy := cy + chartH/2
-		sw := 1.5 * ptPx // icon stroke width
-		switch s.icon {
-		case "therm":
-			bulbR := 4 * ptPx
-			stemH := 13 * ptPx
-			stemBot := icy - bulbR
-			stemTop := stemBot - stemH
-			fmt.Fprintf(&b, `<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="black" stroke-width="%.1f" stroke-linecap="round"/>`,
-				icx, stemTop, icx, stemBot, sw)
-			fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="black"/>`,
-				icx, icy, bulbR)
-		case "wind":
-			gap := 4 * ptPx
-			lengths := []float64{14 * ptPx, 10 * ptPx, 6 * ptPx}
-			totalH := gap * float64(len(lengths)-1)
-			top := icy - totalH/2
-			for li, l := range lengths {
-				ly := top + float64(li)*gap
-				fmt.Fprintf(&b, `<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="black" stroke-width="%.1f" stroke-linecap="round"/>`,
-					icx-l/2, ly, icx+l/2, ly, sw)
-			}
-		case "rain":
-			tw := 12 * ptPx
-			th := 14 * ptPx
-			fmt.Fprintf(&b, `<polygon points="%.1f,%.1f %.1f,%.1f %.1f,%.1f" fill="black"/>`,
-				icx-tw/2, icy-th/2, icx+tw/2, icy-th/2, icx, icy+th/2)
-		}
-	}
-
-	// Shared vertical time lines spanning all three charts
-	timeIdxs := []int{0, 5, 10, 15}
-	timeLabels := []string{"7", "12", "17", "22"}
-	lineBottom := chartsH + vExt
-
-	for i, idx := range timeIdxs {
-		vx := chartX0 + float64(idx)*dayStep
-		// Line stops a few px above label to avoid last-dash overlap
-		fmt.Fprintf(&b, `<line x1="%.1f" y1="0" x2="%.1f" y2="%.1f" stroke-width="%.1f" %s/>`,
-			vx, vx, lineBottom-labelFontSize, gridStrokeW, gridStyle)
-		// Label sits below the line, left-aligned from the line
-		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" font-size="%.1f" font-family="Georgia,serif" fill="black">%s</text>`,
-			vx+4, lineBottom, labelFontSize, timeLabels[i])
-	}
-
-	b.WriteString(`</svg>`)
-	return template.HTML(b.String())
-}
-
-// -- dashboard template --
 
 type dashboardData struct {
 	Temp      int
@@ -408,27 +222,33 @@ type dashboardData struct {
 	TempMax   int
 	WindMPH   int
 	Condition string
-	ChartSVG  template.HTML
+	DataJSON  template.JS // weather series → JS
+	D3Source  template.JS // inlined D3 library
 	Debug     bool
 }
 
 func buildDashboard(wd *weatherData, debug bool) dashboardData {
-	d := dashboardData{
-		Condition: wd.Condition,
+	cj := chartJSON{
+		HourlyTemp:   wd.HourlyTemp,
+		HourlyWind:   wd.HourlyWind,
+		HourlyPrecip: wd.HourlyPrecip,
+	}
+	jsonBytes, _ := json.Marshal(cj)
+	return dashboardData{
 		Temp:      wd.Temp,
 		TempMin:   wd.TempMin,
 		TempMax:   wd.TempMax,
 		WindMPH:   wd.WindMPH,
+		Condition: wd.Condition,
+		DataJSON:  template.JS(jsonBytes),
+		D3Source:  template.JS(d3JS),
 		Debug:     debug,
 	}
-	d.ChartSVG = buildChartSVG(wd.HourlyTemp, wd.HourlyWind, wd.HourlyPrecip)
-	return d
 }
 
 // -- Chrome rendering --
 
 func findChrome() (string, error) {
-	// Check CHROME_BIN env override first
 	if v := os.Getenv("CHROME_BIN"); v != "" {
 		return v, nil
 	}
@@ -455,7 +275,6 @@ func renderHTML(tmplPath, pngOut string, data dashboardData) error {
 	renderMu.Lock()
 	defer renderMu.Unlock()
 
-	// Parse and execute template into a temp HTML file
 	tmpl, err := template.ParseFiles(tmplPath)
 	if err != nil {
 		return fmt.Errorf("parse template: %w", err)
@@ -473,7 +292,6 @@ func renderHTML(tmplPath, pngOut string, data dashboardData) error {
 	}
 	tmp.Close()
 
-	// Run Chrome headless
 	chrome, err := findChrome()
 	if err != nil {
 		return err
@@ -617,10 +435,7 @@ func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, tmpl
 			data = buildDashboard(wd, debug)
 		}
 	}
-	if location != "" {
-		// location not currently rendered but kept for future use
-		_ = location
-	}
+	_ = location // retained for future footer use
 
 	if err := renderHTML(tmplSrc, pngOut, data); err != nil {
 		log.Printf("[display] render error: %v", err)
@@ -684,12 +499,10 @@ func main() {
 	}
 
 	devicesPath = *dp
-
 	rand.Seed(time.Now().UnixNano()) //nolint:staticcheck
 	loadRegistry(devicesPath)
 
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("GET /api/setup", handleSetup)
 	mux.HandleFunc("GET /api/display", func(w http.ResponseWriter, r *http.Request) {
 		handleDisplay(w, r, *refreshRate, *tmplSrc, *pngOut, *lat, *lon, *location, *debug)
