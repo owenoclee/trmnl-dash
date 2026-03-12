@@ -1,32 +1,35 @@
 # TRMNL ePaper Dashboard - Build System
 # Target: 1872x1404 PNG @ 227 PPI (10.3" display)
+# Stack: HTML/SVG template → headless Chrome → PNG
 
 # Load .env if present (copy .env.example to .env and fill in your values)
 -include .env
 export
 
-PPI    := 227
-SRC    := dashboard.typ
+TMPL   := dashboard.html
 OUT    := dashboard.png
 VIEWER := .viewer
 
 SERVER := server
 
-.PHONY: build preview open clean server serve
-
-build:
-	typst compile --format png --ppi $(PPI) $(SRC) $(OUT)
+.PHONY: preview preview-debug open clean server serve
 
 $(VIEWER): viewer.swift
 	swiftc -o $(VIEWER) viewer.swift
 
-# Live preview: fetch real weather, compile, open in e-ink simulator.
+# Live preview: fetch real weather, render PNG, open in e-ink simulator.
 # Zoom is auto-detected from the screen; override with ZOOM=56 if needed.
 preview: $(SERVER) $(VIEWER)
-	./$(SERVER) --once --out $(OUT)
+	./$(SERVER) --once --tmpl $(TMPL) --out $(OUT)
 	./$(VIEWER) $(OUT) $(ZOOM)
 
-open: build
+# Preview with margin guides visible
+preview-debug: $(SERVER) $(VIEWER)
+	./$(SERVER) --once --debug --tmpl $(TMPL) --out $(OUT)
+	./$(VIEWER) $(OUT) $(ZOOM)
+
+open: $(SERVER)
+	./$(SERVER) --once --tmpl $(TMPL) --out $(OUT)
 	open $(OUT)
 
 $(SERVER): server.go go.mod
@@ -35,9 +38,9 @@ $(SERVER): server.go go.mod
 # Build the server binary without running it
 server: $(SERVER)
 
-# Build the PNG and start the BYOS server.
+# Render PNG and start the BYOS server.
 # Optional: make serve ADDR=:9090 REFRESH_RATE=900
-serve: build $(SERVER)
+serve: $(SERVER)
 	./$(SERVER) \
 		$(if $(ADDR),--addr $(ADDR),) \
 		$(if $(REFRESH_RATE),--refresh-rate $(REFRESH_RATE),)

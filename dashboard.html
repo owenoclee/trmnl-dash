@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 1872px;
+  height: 1404px;
+  background: white;
+  color: black;
+  font-family: Georgia, 'Times New Roman', serif;
+  overflow: hidden;
+}
+
+.page {
+  position: relative;
+  width: 1872px;
+  height: 1404px;
+  /* margins: 0.4in × 0.45in at 227ppi = 91px × 102px */
+  padding: 91px 102px;
+}
+
+/* Debug: red dashed rectangle showing the content margin boundary */
+.page::before {
+  content: '';
+  display: none;
+  position: absolute;
+  inset: 91px 102px;
+  border: 2px dashed red;
+  pointer-events: none;
+  z-index: 999;
+}
+body.debug .page::before { display: block; }
+
+.conditions {
+  display: flex;
+  align-items: center;
+  gap: 63px;
+  margin-bottom: 44px;
+}
+
+/* 64pt at 227ppi */
+.temp {
+  font-size: 202px;
+  font-weight: bold;
+  line-height: 1;
+  white-space: nowrap;
+  letter-spacing: -3px;
+}
+
+/* 20pt */
+.condition { font-size: 63px; margin-bottom: 13px; }
+
+/* 13pt */
+.details { font-size: 41px; color: #606060; }
+</style>
+</head>
+<body{{if .Debug}} class="debug"{{end}}>
+<div class="page">
+
+  <div class="conditions">
+    <div class="temp">{{.Temp}}°C</div>
+    <div>
+      {{if .Condition}}<div class="condition">{{.Condition}}</div>{{end}}
+      <div class="details">High {{.TempMax}}&deg;&nbsp;&middot;&nbsp;Low {{.TempMin}}&deg;&nbsp;&middot;&nbsp;Wind {{.WindMPH}} mph</div>
+    </div>
+  </div>
+
+  {{.ChartSVG}}
+
+</div>
+</body>
+</html>
