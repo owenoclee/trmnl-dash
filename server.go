@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -20,9 +19,6 @@ import (
 	"sync"
 	"time"
 )
-
-//go:embed d3.v7.min.js
-var d3JS string
 
 // Device represents a registered TRMNL device.
 type Device struct {
@@ -209,41 +205,41 @@ func wmoCondition(code int) string {
 // Go's job: fetch data, serialise to JSON, hand off to the template.
 // All chart rendering logic lives in dashboard.html / JS.
 
-// chartJSON is the data contract passed to the JS layer.
-type chartJSON struct {
+// dashJSON is the complete data contract passed to the JS layer.
+// Go's only job: populate this struct and serialise it.
+type dashJSON struct {
+	Temp         int       `json:"temp"`
+	TempMin      int       `json:"tempMin"`
+	TempMax      int       `json:"tempMax"`
+	WindMPH      int       `json:"windMPH"`
+	Condition    string    `json:"condition"`
+	Debug        bool      `json:"debug"`
+	Headless     bool      `json:"headless"`
 	HourlyTemp   []float64 `json:"hourlyTemp"`
 	HourlyWind   []float64 `json:"hourlyWind"`
 	HourlyPrecip []float64 `json:"hourlyPrecip"`
 }
 
+// dashboardData is the Go template context — a single JSON blob, nothing else.
 type dashboardData struct {
-	Temp      int
-	TempMin   int
-	TempMax   int
-	WindMPH   int
-	Condition string
-	DataJSON  template.JS // weather series → JS
-	D3Source  template.JS // inlined D3 library
-	Debug     bool
+	DataJSON template.JS
 }
 
 func buildDashboard(wd *weatherData, debug bool) dashboardData {
-	cj := chartJSON{
+	d := dashJSON{
+		Temp:         wd.Temp,
+		TempMin:      wd.TempMin,
+		TempMax:      wd.TempMax,
+		WindMPH:      wd.WindMPH,
+		Condition:    wd.Condition,
+		Debug:        debug,
+		Headless:     true,
 		HourlyTemp:   wd.HourlyTemp,
 		HourlyWind:   wd.HourlyWind,
 		HourlyPrecip: wd.HourlyPrecip,
 	}
-	jsonBytes, _ := json.Marshal(cj)
-	return dashboardData{
-		Temp:      wd.Temp,
-		TempMin:   wd.TempMin,
-		TempMax:   wd.TempMax,
-		WindMPH:   wd.WindMPH,
-		Condition: wd.Condition,
-		DataJSON:  template.JS(jsonBytes),
-		D3Source:  template.JS(d3JS),
-		Debug:     debug,
-	}
+	jsonBytes, _ := json.Marshal(d)
+	return dashboardData{DataJSON: template.JS(jsonBytes)}
 }
 
 // -- Chrome rendering --

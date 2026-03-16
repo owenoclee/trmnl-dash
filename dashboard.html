@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -10,7 +13,7 @@ body {
   height: 1404px;
   background: white;
   color: black;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: 'Inter', system-ui, sans-serif;
   overflow: hidden;
 }
 
@@ -36,8 +39,9 @@ body.debug .page::before { display: block; }
 
 /* 64pt at 227ppi */
 .temp {
+  font-family: 'Inter', system-ui, sans-serif;
   font-size: 202px;
-  font-weight: bold;
+  font-weight: 700;
   line-height: 1;
   white-space: nowrap;
   letter-spacing: -3px;
@@ -57,14 +61,14 @@ body.debug .page::before { display: block; }
 .details { font-size: 41px; color: #606060; }
 </style>
 </head>
-<body{{if .Debug}} class="debug"{{end}}>
+<body>
 <div class="page">
 
   <div class="conditions">
-    <div class="temp">{{.Temp}}°C</div>
+    <div class="temp"><span id="w-temp">—</span>°C</div>
     <div>
-      {{if .Condition}}<div class="condition">{{.Condition}}</div>{{end}}
-      <div class="details">High {{.TempMax}}&deg;&nbsp;&middot;&nbsp;Low {{.TempMin}}&deg;&nbsp;&middot;&nbsp;Wind {{.WindMPH}} mph</div>
+      <div class="condition" id="w-condition" style="display:none"></div>
+      <div class="details">High <span id="w-high">—</span>&deg;&nbsp;&middot;&nbsp;Low <span id="w-low">—</span>&deg;&nbsp;&middot;&nbsp;Wind <span id="w-wind">—</span> mph</div>
     </div>
   </div>
 
@@ -72,204 +76,316 @@ body.debug .page::before { display: block; }
 
 </div>
 
-<!-- D3 library (vendored, inlined by Go at render time) -->
-<script>{{.D3Source}}</script>
+<!-- D3 — loaded from CDN (works both in headless Chrome render and direct browser preview) -->
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 
-<!-- Chart data injected by Go -->
-<script>const DATA = {{.DataJSON}};</script>
+<!-- Chart data: Go injects JSON here; falls back to fake data when opened directly -->
+<script type="application/json" id="chart-data">{{.DataJSON}}</script>
 
 <!-- Chart rendering — pure presentation, no data fetching -->
 <script>
 (function () {
-  // ---------------------------------------------------------------------------
-  // Physical dimensions — all derived from the original Typst design.
-  // 1pt = 227/72 ≈ 3.153px  (227ppi display, 72pt/in)
-  // ---------------------------------------------------------------------------
-  const PT = 227 / 72;
-
-  const CONTENT_W  = 1872 - 2 * 102;         // 1668px  (page − 2 × margin)
-  const ICON_COL   = 18 * PT;                 // icon column width
-  const ICON_GAP   = 8  * PT;                 // gap between icon and labels
-  const LABEL_W    = 22 * PT;                 // y-axis label column
-  const CHART_W    = CONTENT_W - ICON_COL - ICON_GAP - LABEL_W;
-  const CHART_H    = 28 * PT;                 // chart height
-  const CHART_GAP  = 20 * PT;                 // vertical gap between charts
-  const H_EXT      = LABEL_W / 2;             // h-line left overhang
-  const V_EXT      = 14 * PT;                 // v-line overhang below last chart
-  const CHART_X0   = ICON_COL + ICON_GAP + LABEL_W;  // chart area left edge
-  const N_DAY      = 16;                      // data points: 7am–10pm inclusive
-  const LABEL_FS   = 8  * PT;                 // label font size
-  const GRID_SW    = 0.4 * PT;                // grid stroke width
+  const DATA = (() => {
+    try { return JSON.parse(document.getElementById('chart-data').textContent); } catch (e) {}
+    return {
+      temp: 11.4, tempMin: 7.8, tempMax: 14.6, windMPH: 17.3, condition: 'Partly cloudy', debug: false,
+      hourlyTemp:   [7.2,7.8,6.9,7.1,7.4,8.3,9.1,10.4,11.2,12.7,13.1,14.3,14.6,14.8,13.9,12.4,11.8,10.9,9.7,9.2,8.6,8.1,7.8,7.5],
+      hourlyWind:   [14.2,13.8,12.9,13.7,15.1,16.4,17.8,19.5,21.3,22.7,21.9,19.6,17.3,16.8,15.4,16.2,17.9,18.6,17.4,15.8,14.5,13.7,12.9,12.1],
+      hourlyPrecip: [0,0,0,0,0,0,0,5,12,22,31,43,52,46,33,21,14,9,4,0,0,0,0,0],
+    };
+  })();
 
   // ---------------------------------------------------------------------------
-  // Colour palette — restricted to the TRMNL 16-shade grayscale.
-  // Shades run from ~sRGB 40 (black) to ~sRGB 215 (white) in 16 steps.
-  // #dddddd (221) is one of the 16 uniform steps (0, 17, 34 … 221, 238, 255).
+  // Fixed constants
   // ---------------------------------------------------------------------------
-  const FILL_COLOR = '#dddddd';
-  const FONT       = "Georgia, 'Times New Roman', serif";
+  const PT        = 227 / 72;
+  const CONTENT_W = 1872 - 2 * 102;
+  const ICON_COL  = 18 * PT;
+  const LABEL_W   = 22 * PT;
+  const N_DAY     = 16;
+  const GRID_SW   = 1;
+  const FONT      = "'Inter', system-ui, sans-serif";
+
+  // ---------------------------------------------------------------------------
+  // Tunable config — driven by sliders in browser preview, fixed at render time
+  // ---------------------------------------------------------------------------
+  const cfg = {
+    iconGap:  50,                   // gap between icon column and chart area
+    hExt:     0,                    // h-line left overhang past chart edge
+    labelGap: 14,                   // gap between chart edge and y-axis label
+    notch:    9,                    // v-line notch depth (px into chart)
+    notchSm:  4,                    // minor (unlabelled) tick notch depth
+    vExt:     36,                   // v-line extension below last chart
+    chartW:   630,                  // chart width
+    chartH:   136,                  // chart height
+    chartGap: 52,                   // vertical gap between charts
+    labelFs:  25,                   // label font size
+  };
 
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
-  function sliceDay(arr) {
-    return arr.slice(7, 23); // 7am–10pm, 16 points
+  const px = n => Math.round(n) + 0.5;
+
+  function fmtDecimal(v) {
+    const r   = Math.round(v * 10) / 10;
+    const neg = r < 0;
+    const abs = Math.abs(r);
+    const int = Math.floor(abs);
+    const dec = Math.round((abs - int) * 10);
+    return { int: `${neg ? '-' : ''}${int}`, dec: dec > 0 ? `.${dec}` : '' };
+  }
+
+  function fmtFrac(v) {
+    const r     = Math.round(v * 4) / 4;
+    const neg   = r < 0;
+    const abs   = Math.abs(r);
+    const int   = Math.floor(abs);
+    const frac  = abs - int;
+    const glyph = { 0.25: '¼', 0.5: '½', 0.75: '¾' }[frac] ?? '';
+    const sign  = neg ? '-' : '';
+    if (glyph && int > 0) return `${sign}${int} ${glyph}`;
+    if (glyph)            return `${sign}${glyph}`;
+    return `${sign}${int}`;
+  }
+
+  function sliceDay(arr) { return arr.slice(7, 23); }
+
+  function styleLine(el) {
+    return el
+      .attr('stroke-width', GRID_SW)
+      .attr('stroke-dasharray', '8,6')
+      .attr('shape-rendering', 'crispEdges');
+  }
+  function blendLine(el) {
+    return styleLine(el).attr('stroke', 'white').style('mix-blend-mode', 'difference');
+  }
+  function blendTick(el) {
+    return el
+      .attr('stroke', 'white').attr('stroke-width', GRID_SW)
+      .attr('shape-rendering', 'crispEdges').style('mix-blend-mode', 'difference');
   }
 
   // ---------------------------------------------------------------------------
-  // Icons — drawn with SVG primitives, centered at (cx, cy)
+  // Icons — Lucide (MIT), 24×24 viewBox
   // ---------------------------------------------------------------------------
-  function drawIcon(g, type, cx, cy) {
-    const sw = 1.5 * PT;
+  function drawIcon(svg, type, cx, cy) {
+    const size  = ICON_COL * 0.78;
+    const scale = size / 24;
+    const g = svg.append('g').attr('transform',
+      `translate(${cx - size/2}, ${cy - size/2}) scale(${scale})`);
+    const s = el => el.attr('fill','none').attr('stroke','black')
+      .attr('stroke-width',2).attr('stroke-linecap','round').attr('stroke-linejoin','round');
     if (type === 'therm') {
-      const r = 4 * PT, stemH = 13 * PT;
-      g.append('line')
-        .attr('x1', cx).attr('y1', cy - r - stemH)
-        .attr('x2', cx).attr('y2', cy - r)
-        .attr('stroke', 'black').attr('stroke-width', sw)
-        .attr('stroke-linecap', 'round');
-      g.append('circle')
-        .attr('cx', cx).attr('cy', cy).attr('r', r)
-        .attr('fill', 'black');
-
+      s(g.append('path').attr('d', 'M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z'));
     } else if (type === 'wind') {
-      const gap = 4 * PT;
-      [14 * PT, 10 * PT, 6 * PT].forEach((len, i) => {
-        const ly = cy - gap + i * gap;
-        g.append('line')
-          .attr('x1', cx - len / 2).attr('y1', ly)
-          .attr('x2', cx + len / 2).attr('y2', ly)
-          .attr('stroke', 'black').attr('stroke-width', sw)
-          .attr('stroke-linecap', 'round');
-      });
-
+      for (const d of ['M12.8 19.6A2 2 0 1 0 14 16H2','M17.5 8a2.5 2.5 0 1 1 2 4H2','M9.8 4.4A2 2 0 1 1 11 8H2'])
+        s(g.append('path').attr('d', d));
     } else if (type === 'rain') {
-      const tw = 12 * PT, th = 14 * PT;
-      g.append('polygon')
-        .attr('points', `${cx - tw/2},${cy - th/2} ${cx + tw/2},${cy - th/2} ${cx},${cy + th/2}`)
-        .attr('fill', 'black');
+      for (const d of ['M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242','M16 14v6','M8 14v6','M12 16v6'])
+        s(g.append('path').attr('d', d));
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Sparkline — one chart row
+  // Render — clears and redraws the chart SVG from current cfg
   // ---------------------------------------------------------------------------
-  function drawSparkline(svg, series, chartIndex) {
-    const { data, unit, yMin, yMax, icon } = series;
-    const cy = chartIndex * (CHART_H + CHART_GAP); // top of this chart
+  function render() {
+    const { iconGap, hExt, labelGap, notch, notchSm, vExt, chartW, chartH, chartGap, labelFs } = cfg;
+    const chartX0 = ICON_COL + iconGap;
+    const chartX1 = Math.round(chartX0 + chartW) + 1; // right edge of the pixel column the right tick occupies
+    const chartsH = 3 * chartH + 2 * chartGap;
+    const svgH    = chartsH + vExt + labelFs + 4;
 
-    const xScale = d3.scaleLinear()
-      .domain([0, data.length - 1])
-      .range([CHART_X0, CHART_X0 + CHART_W]);
+    d3.select('.charts').selectAll('*').remove();
+    const svg = d3.select('.charts').append('svg')
+      .attr('width', CONTENT_W).attr('height', svgH)
+      .style('display', 'block').style('overflow', 'visible');
 
-    const yScale = d3.scaleLinear()
-      .domain([yMin ?? d3.min(data), yMax ?? d3.max(data)])
-      .range([cy + CHART_H, cy]);
+    const series = [
+      { data: sliceDay(DATA.hourlyTemp),   unit: '°C',  icon: 'therm', label: 'Temp (°C)'  },
+      { data: sliceDay(DATA.hourlyWind),   unit: ' mph', icon: 'wind',  label: 'Wind (mph)' },
+      { data: sliceDay(DATA.hourlyPrecip), unit: '%',   icon: 'rain', yMin: 0, yMax: 100, label: 'Rain Prob.', displayScale: 1/100, useFrac: true },
+    ];
 
-    const dMin = yMin ?? d3.min(data);
-    const dMax = yMax ?? d3.max(data);
-
-    // 1 — filled area
-    svg.append('path')
-      .datum(data)
-      .attr('fill', FILL_COLOR)
-      .attr('stroke', 'none')
-      .attr('d', d3.area()
-        .x((d, i) => xScale(i))
-        .y0(cy + CHART_H)
-        .y1((d) => yScale(d))
-        .curve(d3.curveMonotoneX)
-      );
-
-    // 2 — data line (above fill, below grid)
-    svg.append('path')
-      .datum(data)
-      .attr('fill', 'none')
-      .attr('stroke', 'black')
-      .attr('stroke-width', 1 * PT)
-      .attr('stroke-linejoin', 'round')
-      .attr('stroke-linecap', 'round')
-      .attr('d', d3.line()
-        .x((d, i) => xScale(i))
-        .y((d) => yScale(d))
-        .curve(d3.curveMonotoneX)
-      );
-
-    // 3 — horizontal grid lines (top / mid / bottom)
-    //     white + mix-blend-mode:difference → always visible regardless of bg
-    [0, 0.5, 1].forEach(frac => {
-      const gy = cy + CHART_H * frac;
-      svg.append('line')
-        .attr('x1', CHART_X0 - H_EXT).attr('y1', gy)
-        .attr('x2', CHART_X0 + CHART_W).attr('y2', gy)
-        .attr('stroke', 'white')
-        .attr('stroke-width', GRID_SW)
-        .attr('stroke-dasharray', '8,6')
-        .style('mix-blend-mode', 'difference');
+    // Pre-compute scales for each series (needed across passes)
+    const scales = series.map(({ data, yMin, yMax }, ci) => {
+      const cy = ci * (chartH + chartGap);
+      return {
+        cy,
+        dMin: yMin ?? d3.min(data),
+        dMax: yMax ?? d3.max(data),
+        xScale: d3.scaleLinear().domain([0, data.length - 1]).range([chartX0, chartX0 + chartW]),
+        yScale: d3.scaleLinear().domain([yMin ?? d3.min(data), yMax ?? d3.max(data)]).range([cy + chartH, cy]),
+      };
     });
 
-    // 4 — y-axis labels: right-aligned, centered on their h-line
-    const lx = CHART_X0 - H_EXT - 5;
-    [
-      { val: dMax, y: cy },
-      { val: dMin, y: cy + CHART_H },
-    ].forEach(({ val, y }) => {
+    // Pass 1 — fills
+    series.forEach(({ data }, ci) => {
+      const { cy, xScale, yScale } = scales[ci];
+      svg.append('path').datum(data)
+        .attr('fill', 'black').attr('stroke', 'none').attr('shape-rendering', 'crispEdges')
+        .attr('d', d3.area().x((d,i) => xScale(i)).y0(cy + chartH).y1(d => yScale(d)).curve(d3.curveMonotoneX));
+    });
+
+    // Pass 2 — blend-mode v-ticks (before h-lines so h-lines render on top, covering intersections)
+    const timeStep  = chartW / (N_DAY - 1);
+    const labelY    = chartsH + vExt + 4;
+    const majorIdxs = new Set([0, 5, 10, 15]);
+
+    // Minor ticks — every unlabelled hour
+    for (let idx = 0; idx < N_DAY; idx++) {
+      if (majorIdxs.has(idx)) continue;
+      const vx = px(chartX0 + idx * timeStep);
+      series.forEach((_, ci) => {
+        const top = ci * (chartH + chartGap);
+        const bot = top + chartH;
+        blendTick(svg.append('line').attr('x1', vx).attr('y1', top + 1).attr('x2', vx).attr('y2', top + notchSm + 1));
+        blendTick(svg.append('line').attr('x1', vx).attr('y1', bot - notchSm).attr('x2', vx).attr('y2', bot));
+      });
+    }
+
+    [[0,'7'],[5,'12'],[10,'17'],[15,'22']].forEach(([idx, label], li, all) => {
+      const vx      = px(chartX0 + idx * timeStep);
+      const isOuter = li === 0 || li === all.length - 1;
+      const tick    = el => isOuter
+        ? el.attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges')
+        : blendTick(el);
+      series.forEach((_, ci) => {
+        const top    = ci * (chartH + chartGap);
+        const bot    = top + chartH;
+        const topExt = isOuter ? 0 : notch;
+        const botExt = ci === series.length - 1 ? vExt : (isOuter ? 0 : notch);
+        tick(svg.append('line').attr('x1', vx).attr('y1', top - topExt + 1).attr('x2', vx).attr('y2', top + notch + 1));
+        tick(svg.append('line').attr('x1', vx).attr('y1', bot - notch).attr('x2', vx).attr('y2', bot + botExt));
+      });
+      svg.append('text').attr('x', vx).attr('y', labelY)
+        .attr('text-anchor', 'middle').attr('dominant-baseline', 'hanging')
+        .attr('font-size', labelFs).attr('font-family', FONT).text(label);
+    });
+
+    // Pass 3 — h-lines, labels, icons (on top of blend-mode ticks, covering intersection artifacts)
+    series.forEach(({ unit, icon, label, displayScale, useFrac }, ci) => {
+      const { cy, dMin, dMax } = scales[ci];
+
+      [0, 0.5, 1].forEach(frac => {
+        const y = px(cy + chartH * frac);
+        if (frac === 0.5) {
+          blendLine(svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX1).attr('y2', y));
+        } else if (frac === 0) {
+          svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX1).attr('y2', y)
+            .attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges');
+        } else {
+          styleLine(svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX0).attr('y2', y)).attr('stroke', 'black');
+          svg.append('line').attr('x1', chartX0).attr('y1', y).attr('x2', chartX1).attr('y2', y)
+            .attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges');
+        }
+      });
+
+      const lx    = chartX0 + chartW + labelGap;
+      const scale = displayScale ?? 1;
+      // All labels use dominant-baseline: auto (y = baseline, cap extends above).
+      // y = h-line + cap-height so the text cap sits flush with the h-line and body hangs into the chart.
+      // dMin is the exception: baseline sits on the bottom h-line, cap extends up into the chart.
+      const capH = labelFs * 0.72;
+      [
+        { val: dMax,              y: cy + capH           },
+        { val: (dMin + dMax) / 2, y: cy + chartH / 2 + capH / 2 },
+        { val: dMin,              y: cy + chartH          },
+      ].forEach(({ val, y }) => {
+        const txt = svg.append('text').attr('x', lx).attr('y', y)
+          .attr('text-anchor', 'start').attr('dominant-baseline', 'auto')
+          .attr('font-family', FONT);
+        if (useFrac) {
+          txt.append('tspan').attr('font-size', labelFs).text(fmtFrac(val * scale));
+        } else {
+          const { int: intStr, dec: decStr } = fmtDecimal(val * scale);
+          txt.append('tspan').attr('font-size', labelFs).text(intStr);
+          if (decStr) txt.append('tspan').attr('font-size', labelFs * 0.7).text(decStr);
+        }
+      });
+
+      const iconHalf = ICON_COL * 0.78 / 2;
+      const iconY = cy + chartH / 2 - 10;
+      drawIcon(svg, icon, ICON_COL / 2, iconY);
       svg.append('text')
-        .attr('x', lx).attr('y', y)
-        .attr('text-anchor', 'end')
-        .attr('dominant-baseline', 'middle')
-        .attr('font-size', LABEL_FS)
-        .attr('font-family', FONT)
-        .text(`${Math.round(val)}${unit}`);
+        .attr('x', ICON_COL / 2).attr('y', iconY + iconHalf + 8)
+        .attr('text-anchor', 'middle').attr('dominant-baseline', 'hanging')
+        .attr('font-size', labelFs).attr('font-family', FONT).text(label);
     });
-
-    // 5 — icon
-    drawIcon(svg, icon, ICON_COL / 2, cy + CHART_H / 2);
   }
 
   // ---------------------------------------------------------------------------
-  // Main render
+  // Header population
   // ---------------------------------------------------------------------------
-  const series = [
-    { data: sliceDay(DATA.hourlyTemp),   unit: '°C',  icon: 'therm' },
-    { data: sliceDay(DATA.hourlyWind),   unit: ' mph', icon: 'wind'  },
-    { data: sliceDay(DATA.hourlyPrecip), unit: '%',   icon: 'rain',  yMin: 0, yMax: 100 },
-  ];
+  document.getElementById('w-temp').textContent = DATA.temp ?? '—';
+  document.getElementById('w-high').textContent = DATA.tempMax ?? '—';
+  document.getElementById('w-low').textContent  = DATA.tempMin ?? '—';
+  document.getElementById('w-wind').textContent = DATA.windMPH ?? '—';
+  if (DATA.condition) {
+    const el = document.getElementById('w-condition');
+    el.textContent = DATA.condition;
+    el.style.display = '';
+  }
+  if (DATA.debug) document.body.classList.add('debug');
 
-  const CHARTS_H = 3 * CHART_H + 2 * CHART_GAP;
-  const SVG_H    = CHARTS_H + V_EXT + LABEL_FS + 4;
+  render();
 
-  const svg = d3.select('.charts')
-    .append('svg')
-    .attr('width', CONTENT_W)
-    .attr('height', SVG_H)
-    .style('display', 'block')
-    .style('overflow', 'visible');
+  // ---------------------------------------------------------------------------
+  // Controls panel — browser preview only (hidden in headless Chrome render)
+  // ---------------------------------------------------------------------------
+  if (!DATA.headless) {
+    // Scale page to fit viewport so it looks approximately the right physical size
+    document.body.style.zoom = Math.min(window.innerWidth / 1872, window.innerHeight / 1404).toFixed(3);
 
-  series.forEach((s, i) => drawSparkline(svg, s, i));
+    // Show device bounds: gray backdrop + shadow on the page element
+    document.documentElement.style.background = '#b0b0b0';
+    document.querySelector('.page').style.boxShadow = '0 4px 24px rgba(0,0,0,0.35)';
 
-  // Shared vertical time lines spanning all three charts
-  const TIME_STEP  = CHART_W / (N_DAY - 1);
-  const LINE_BOT   = CHARTS_H + V_EXT - LABEL_FS; // stop before label area
-  const LABEL_Y    = CHARTS_H + V_EXT;
+    const SLIDERS = [
+      { key: 'chartW',   label: 'Chart width',         min: 200,  max: 1400, step: 10  },
+      { key: 'chartH',   label: 'Chart height',        min: 30,   max: 200,  step: 2   },
+      { key: 'chartGap', label: 'Gap between charts',  min: 0,    max: 150,  step: 2   },
+      { key: 'hExt',     label: 'H-line overhang',     min: 0,    max: 100,  step: 1   },
+      { key: 'labelGap', label: 'Label ↔ h-line gap',  min: 0,    max: 30,   step: 1   },
+      { key: 'iconGap',  label: 'Icon ↔ chart gap',    min: 0,    max: 80,   step: 1   },
+      { key: 'notch',    label: 'Notch depth',         min: 0,    max: 80,   step: 1   },
+      { key: 'notchSm',  label: 'Minor notch depth',   min: 0,    max: 40,   step: 1   },
+      { key: 'vExt',     label: 'V-line overhang',     min: 0,    max: 100,  step: 1   },
+      { key: 'labelFs',  label: 'Font size',           min: 8,    max: 60,   step: 1   },
+    ];
 
-  [[0, '7'], [5, '12'], [10, '17'], [15, '22']].forEach(([idx, label]) => {
-    const vx = CHART_X0 + idx * TIME_STEP;
+    const panel = Object.assign(document.createElement('div'), { id: 'cfg-panel' });
+    Object.assign(panel.style, {
+      position: 'fixed', top: '12px', right: '12px', zIndex: '9999',
+      background: 'rgba(255,255,255,0.92)', border: '1px solid #ccc',
+      borderRadius: '8px', padding: '12px 16px', fontFamily: 'monospace',
+      fontSize: '11px', lineHeight: '1.6', minWidth: '220px',
+      boxShadow: '0 2px 12px rgba(0,0,0,0.15)', backdropFilter: 'blur(4px)',
+    });
 
-    svg.append('line')
-      .attr('x1', vx).attr('y1', 0)
-      .attr('x2', vx).attr('y2', LINE_BOT)
-      .attr('stroke', 'white')
-      .attr('stroke-width', GRID_SW)
-      .attr('stroke-dasharray', '8,6')
-      .style('mix-blend-mode', 'difference');
+    SLIDERS.forEach(({ key, label, min, max, step }) => {
+      const row   = document.createElement('div');
+      const lbl   = Object.assign(document.createElement('label'), { textContent: label });
+      const val   = Object.assign(document.createElement('span'), { textContent: cfg[key] });
+      Object.assign(val.style, { float: 'right', color: '#555', minWidth: '32px', textAlign: 'right' });
+      const input = Object.assign(document.createElement('input'), {
+        type: 'range', min, max, step, value: cfg[key],
+      });
+      Object.assign(input.style, { width: '100%', margin: '2px 0 6px', display: 'block' });
+      input.addEventListener('input', () => {
+        cfg[key] = Number(input.value);
+        val.textContent = cfg[key];
+        render();
+      });
+      lbl.appendChild(val);
+      row.appendChild(lbl);
+      row.appendChild(input);
+      panel.appendChild(row);
+    });
 
-    svg.append('text')
-      .attr('x', vx + 4).attr('y', LABEL_Y)
-      .attr('font-size', LABEL_FS)
-      .attr('font-family', FONT)
-      .text(label);
-  });
+    document.body.appendChild(panel);
+  }
 
 })();
 </script>
