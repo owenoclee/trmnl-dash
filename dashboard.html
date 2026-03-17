@@ -205,7 +205,7 @@ body.debug .page::before { display: block; }
     const series = [
       { data: sliceDay(DATA.hourlyTemp),   unit: '°C',  icon: 'therm', label: 'Temp (°C)'  },
       { data: sliceDay(DATA.hourlyWind),   unit: ' mph', icon: 'wind',  label: 'Wind (mph)' },
-      { data: sliceDay(DATA.hourlyPrecip), unit: '%',   icon: 'rain', yMin: 0, yMax: 100, label: 'Rain Prob.', displayScale: 1/100, useFrac: true },
+      { data: sliceDay(DATA.hourlyPrecip), unit: '%',   icon: 'rain', yMin: 0, yMax: 100, label: 'Rain Prob.' },
     ];
 
     // Pre-compute scales for each series (needed across passes)
@@ -265,7 +265,7 @@ body.debug .page::before { display: block; }
     });
 
     // Pass 3 — h-lines, labels, icons (on top of blend-mode ticks, covering intersection artifacts)
-    series.forEach(({ unit, icon, label, displayScale, useFrac }, ci) => {
+    series.forEach(({ unit, icon, label }, ci) => {
       const { cy, dMin, dMax } = scales[ci];
 
       [0, 0.5, 1].forEach(frac => {
@@ -282,27 +282,17 @@ body.debug .page::before { display: block; }
         }
       });
 
-      const lx    = chartX0 + chartW + labelGap;
-      const scale = displayScale ?? 1;
-      // All labels use dominant-baseline: auto (y = baseline, cap extends above).
-      // y = h-line + cap-height so the text cap sits flush with the h-line and body hangs into the chart.
-      // dMin is the exception: baseline sits on the bottom h-line, cap extends up into the chart.
+      const lx   = chartX0 + chartW + labelGap;
       const capH = labelFs * 0.72;
       [
-        { val: dMax,              y: cy + capH           },
+        { val: dMax,              y: cy + capH                   },
         { val: (dMin + dMax) / 2, y: cy + chartH / 2 + capH / 2 },
-        { val: dMin,              y: cy + chartH          },
+        { val: dMin,              y: cy + chartH                  },
       ].forEach(({ val, y }) => {
-        const txt = svg.append('text').attr('x', lx).attr('y', y)
+        svg.append('text').attr('x', lx).attr('y', y)
           .attr('text-anchor', 'start').attr('dominant-baseline', 'auto')
-          .attr('font-family', FONT);
-        if (useFrac) {
-          txt.append('tspan').attr('font-size', labelFs).text(fmtFrac(val * scale));
-        } else {
-          const { int: intStr, dec: decStr } = fmtDecimal(val * scale);
-          txt.append('tspan').attr('font-size', labelFs).text(intStr);
-          if (decStr) txt.append('tspan').attr('font-size', labelFs * 0.7).text(decStr);
-        }
+          .attr('font-size', labelFs).attr('font-family', FONT)
+          .text(Math.round(val));
       });
 
       const iconHalf = ICON_COL * 0.78 / 2;
@@ -318,10 +308,10 @@ body.debug .page::before { display: block; }
   // ---------------------------------------------------------------------------
   // Header population
   // ---------------------------------------------------------------------------
-  document.getElementById('w-temp').textContent = DATA.temp ?? '—';
-  document.getElementById('w-high').textContent = DATA.tempMax ?? '—';
-  document.getElementById('w-low').textContent  = DATA.tempMin ?? '—';
-  document.getElementById('w-wind').textContent = DATA.windMPH ?? '—';
+  document.getElementById('w-temp').textContent = DATA.temp  != null ? Math.round(DATA.temp)   : '—';
+  document.getElementById('w-high').textContent = DATA.tempMax != null ? Math.round(DATA.tempMax) : '—';
+  document.getElementById('w-low').textContent  = DATA.tempMin != null ? Math.round(DATA.tempMin) : '—';
+  document.getElementById('w-wind').textContent = DATA.windMPH != null ? Math.round(DATA.windMPH) : '—';
   if (DATA.condition) {
     const el = document.getElementById('w-condition');
     el.textContent = DATA.condition;
