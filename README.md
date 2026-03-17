@@ -12,12 +12,23 @@ A personal dashboard for the [TRMNL](https://usetrmnl.com) ePaper display device
 | Physical PPI | ~227 |
 | Aspect ratio | 4:3 |
 
+## Requirements
+
+- Go (for the server)
+- Swift (for the preview viewer, macOS only)
+- Google Chrome or Chromium (for headless rendering)
+- [fswatch](https://github.com/emcrisostomo/fswatch) — for live reload in `make preview`
+
+```bash
+brew install fswatch
+```
+
 ## Usage
 
 ```bash
-make build      # compile dashboard.typ → dashboard.png at 1872×1404
-make preview    # build + open in true-size e-ink simulator (macOS only)
-make open       # build + open the raw PNG in Preview
+make preview    # start server, open e-ink simulator, watch for changes (macOS only)
+make open       # render once and open the raw PNG in Preview.app
+make serve      # start BYOS server for the physical device
 make clean      # remove dashboard.png, .viewer binary, and server binary
 ```
 
@@ -85,4 +96,4 @@ make preview ZOOM=50
 - [x] Web server with `/api/display` endpoint that returns png
 - [x] Real content widgets: weather (Open-Meteo - temp, high/low, wind, hourly chart)
 - [ ] Post-process output to true 4-bit grayscale (device dithers anyway)
-- [ ] Hot-reload in preview
+- [x] Hot-reload in preview

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/chromedp/chromedp"
 )
 
 // Device represents a registered TRMNL device.
@@ -31,6 +34,11 @@ type Device struct {
 	RSSI           string    `json:"rssi,omitempty"`
 	FWVersion      string    `json:"fw_version,omitempty"`
 }
+
+var (
+	devMode  = os.Getenv("DEV") != ""
+	debugMode = os.Getenv("DEBUG") != ""
+)
 
 var (
 	registryMu  sync.RWMutex
@@ -225,14 +233,14 @@ type dashboardData struct {
 	DataJSON template.JS
 }
 
-func buildDashboard(wd *weatherData, debug bool) dashboardData {
+func buildDashboard(wd *weatherData) dashboardData {
 	d := dashJSON{
 		Temp:         wd.Temp,
 		TempMin:      wd.TempMin,
 		TempMax:      wd.TempMax,
 		WindMPH:      wd.WindMPH,
 		Condition:    wd.Condition,
-		Debug:        debug,
+		Debug:        debugMode,
 		Headless:     true,
 		HourlyTemp:   wd.HourlyTemp,
 		HourlyWind:   wd.HourlyWind,
@@ -267,9 +275,44 @@ func findChrome() (string, error) {
 	return "", fmt.Errorf("no Chrome/Chromium found; install Chrome or set CHROME_BIN")
 }
 
+// chromeCtx is a persistent browser context kept alive for the life of the process.
+// Chrome starts on first render and is reused for all subsequent renders, avoiding
+// the ~1-2s cold-start penalty on every re-render.
+var (
+	chromeOnce   sync.Once
+	chromeCtx    context.Context
+	chromeCancel context.CancelFunc
+	chromeErr    error
+)
+
+func initChrome() error {
+	chromeOnce.Do(func() {
+		chrome, err := findChrome()
+		if err != nil {
+			chromeErr = err
+			return
+		}
+		opts := append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.ExecPath(chrome),
+			chromedp.Flag("hide-scrollbars", true),
+			chromedp.Flag("force-device-scale-factor", "1"),
+			chromedp.WindowSize(1872, 1404),
+		)
+		allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+		ctx, cancel := chromedp.NewContext(allocCtx)
+		chromeCtx = ctx
+		chromeCancel = func() { cancel(); allocCancel() }
+	})
+	return chromeErr
+}
+
 func renderHTML(tmplPath, pngOut string, data dashboardData) error {
 	renderMu.Lock()
 	defer renderMu.Unlock()
+
+	if err := initChrome(); err != nil {
+		return err
+	}
 
 	tmpl, err := template.ParseFiles(tmplPath)
 	if err != nil {
@@ -288,26 +331,18 @@ func renderHTML(tmplPath, pngOut string, data dashboardData) error {
 	}
 	tmp.Close()
 
-	chrome, err := findChrome()
-	if err != nil {
-		return err
-	}
 	absHTML, _ := filepath.Abs(tmpPath)
 	absPNG, _ := filepath.Abs(pngOut)
 
-	cmd := exec.Command(chrome,
-		"--headless=new",
-		"--disable-gpu",
-		"--no-sandbox",
-		"--hide-scrollbars",
-		"--force-device-scale-factor=1",
-		"--window-size=1872,1404",
-		"--screenshot="+absPNG,
-		"file://"+absHTML,
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	var buf []byte
+	if err := chromedp.Run(chromeCtx,
+		chromedp.EmulateViewport(1872, 1404),
+		chromedp.Navigate("file://"+absHTML),
+		chromedp.CaptureScreenshot(&buf),
+	); err != nil {
+		return fmt.Errorf("chromedp: %w", err)
+	}
+	return os.WriteFile(absPNG, buf, 0644)
 }
 
 // -- helpers --
@@ -395,32 +430,34 @@ func handleSetup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, tmplSrc, pngOut string, lat, lon float64, location string, debug bool) {
-	token := r.Header.Get("Access-Token")
+func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, tmplSrc, pngOut string, lat, lon float64, location string) {
+	if !devMode {
+		token := r.Header.Get("Access-Token")
 
-	registryMu.Lock()
-	d, ok := byKey[token]
-	if ok {
-		d.LastSeen = time.Now()
-		d.BatteryVoltage = r.Header.Get("Battery-Voltage")
-		d.RSSI = r.Header.Get("RSSI")
-		d.FWVersion = r.Header.Get("FW-Version")
-		saveRegistry()
+		registryMu.Lock()
+		d, ok := byKey[token]
+		if ok {
+			d.LastSeen = time.Now()
+			d.BatteryVoltage = r.Header.Get("Battery-Voltage")
+			d.RSSI = r.Header.Get("RSSI")
+			d.FWVersion = r.Header.Get("FW-Version")
+			saveRegistry()
+		}
+		registryMu.Unlock()
+
+		if !ok {
+			log.Printf("[display] unknown token, returning 202")
+			writeJSON(w, http.StatusOK, map[string]any{"status": 202})
+			return
+		}
+
+		log.Printf("[display] device=%s battery=%s rssi=%s fw=%s",
+			d.FriendlyID,
+			r.Header.Get("Battery-Voltage"),
+			r.Header.Get("RSSI"),
+			r.Header.Get("FW-Version"),
+		)
 	}
-	registryMu.Unlock()
-
-	if !ok {
-		log.Printf("[display] unknown token, returning 202")
-		writeJSON(w, http.StatusOK, map[string]any{"status": 202})
-		return
-	}
-
-	log.Printf("[display] device=%s battery=%s rssi=%s fw=%s",
-		d.FriendlyID,
-		r.Header.Get("Battery-Voltage"),
-		r.Header.Get("RSSI"),
-		r.Header.Get("FW-Version"),
-	)
 
 	var data dashboardData
 	if !math.IsNaN(lat) && !math.IsNaN(lon) {
@@ -428,7 +465,7 @@ func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, tmpl
 		if err != nil {
 			log.Printf("[weather] unavailable: %v", err)
 		} else {
-			data = buildDashboard(wd, debug)
+			data = buildDashboard(wd)
 		}
 	}
 	_ = location // retained for future footer use
@@ -475,24 +512,7 @@ func main() {
 	lat         := flag.Float64("lat", envFloat("TRMNL_LAT"), "Weather latitude (or set TRMNL_LAT)")
 	lon         := flag.Float64("lon", envFloat("TRMNL_LON"), "Weather longitude (or set TRMNL_LON)")
 	location    := flag.String("location", os.Getenv("TRMNL_LOCATION"), "Location name (or set TRMNL_LOCATION)")
-	once        := flag.Bool("once", false, "Fetch weather, render PNG, and exit (for preview)")
-	debug       := flag.Bool("debug", false, "Show margin guides in rendered output")
 	flag.Parse()
-
-	if *once {
-		var data dashboardData
-		if !math.IsNaN(*lat) && !math.IsNaN(*lon) {
-			wd, err := fetchWeather(*lat, *lon)
-			if err != nil {
-				log.Fatalf("[weather] %v", err)
-			}
-			data = buildDashboard(wd, *debug)
-		}
-		if err := renderHTML(*tmplSrc, *pngOut, data); err != nil {
-			log.Fatalf("render: %v", err)
-		}
-		return
-	}
 
 	devicesPath = *dp
 	rand.Seed(time.Now().UnixNano()) //nolint:staticcheck
@@ -501,7 +521,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/setup", handleSetup)
 	mux.HandleFunc("GET /api/display", func(w http.ResponseWriter, r *http.Request) {
-		handleDisplay(w, r, *refreshRate, *tmplSrc, *pngOut, *lat, *lon, *location, *debug)
+		handleDisplay(w, r, *refreshRate, *tmplSrc, *pngOut, *lat, *lon, *location)
 	})
 	mux.HandleFunc("POST /api/log", handleLog)
 	mux.HandleFunc("GET /dashboard.png", func(w http.ResponseWriter, r *http.Request) {
