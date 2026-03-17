@@ -206,9 +206,9 @@ body.debug .page::before { display: block; }
       .style('display', 'block').style('overflow', 'visible');
 
     const series = [
-      { data: sliceDay(DATA.hourlyTemp),   unit: '°C',  icon: 'therm', label: 'Temp (°C)'  },
-      { data: sliceDay(DATA.hourlyWind),   unit: ' mph', icon: 'wind',  label: 'Wind (mph)' },
-      { data: sliceDay(DATA.hourlyPrecip), unit: '%',   icon: 'rain', yMin: 0, yMax: 100, label: 'Rain Prob.' },
+      { data: sliceDay(DATA.hourlyTemp),   unit: '°C',  icon: 'therm'                  },
+      { data: sliceDay(DATA.hourlyWind),   unit: 'mph', icon: 'wind'                   },
+      { data: sliceDay(DATA.hourlyPrecip), unit: '%',   icon: 'rain', yMin: 0, yMax: 100 },
     ];
 
     // Pre-compute scales for each series (needed across passes)
@@ -268,7 +268,7 @@ body.debug .page::before { display: block; }
     });
 
     // Pass 3 — h-lines, labels, icons (on top of blend-mode ticks, covering intersection artifacts)
-    series.forEach(({ unit, icon, label }, ci) => {
+    series.forEach(({ unit, icon }, ci) => {
       const { cy, dMin, dMax } = scales[ci];
 
       [0, 0.5, 1].forEach(frac => {
@@ -287,24 +287,20 @@ body.debug .page::before { display: block; }
 
       const lx   = chartX0 + chartW + labelGap;
       const capH = labelFs * 0.72;
+      const unitFs = Math.round(labelFs * 0.76);
       [
         { val: dMax,              y: cy + capH                   },
         { val: (dMin + dMax) / 2, y: cy + chartH / 2 + capH / 2 },
         { val: dMin,              y: cy + chartH                  },
       ].forEach(({ val, y }) => {
-        svg.append('text').attr('x', lx).attr('y', y)
+        const t = svg.append('text').attr('x', lx).attr('y', y)
           .attr('text-anchor', 'start').attr('dominant-baseline', 'auto')
-          .attr('font-size', labelFs).attr('font-family', FONT)
-          .text(Math.round(val));
+          .attr('font-family', FONT);
+        t.append('tspan').attr('font-size', labelFs).text(Math.round(val));
+        t.append('tspan').attr('font-size', unitFs).attr('fill', '#999').attr('dx', 2).text(unit);
       });
 
-      const iconHalf = ICON_COL * 0.78 / 2;
-      const iconY = cy + chartH / 2 - 10;
-      drawIcon(svg, icon, ICON_COL / 2, iconY);
-      svg.append('text')
-        .attr('x', ICON_COL / 2).attr('y', iconY + iconHalf + 8)
-        .attr('text-anchor', 'middle').attr('dominant-baseline', 'hanging')
-        .attr('font-size', labelFs).attr('font-family', FONT).text(label);
+      drawIcon(svg, icon, ICON_COL / 2, cy + chartH / 2);
     });
   }
 
