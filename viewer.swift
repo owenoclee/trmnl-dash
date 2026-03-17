@@ -89,6 +89,8 @@ func einkSimulate(_ src: NSImage) -> NSImage {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
+    var imageView: NSImageView!
+    var lastModDate: Date?
 
     func applicationDidFinishLaunching(_: Notification) {
         guard let image = NSImage(contentsOfFile: imagePath) else {
@@ -100,9 +102,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let size = NSSize(width:  image.size.width  * zoom,
                           height: image.size.height * zoom)
 
-        let iv = NSImageView(frame: NSRect(origin: .zero, size: size))
-        iv.image        = einkSimulate(image)
-        iv.imageScaling = .scaleProportionallyUpOrDown
+        imageView = NSImageView(frame: NSRect(origin: .zero, size: size))
+        imageView.image        = einkSimulate(image)
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        lastModDate = modDate()
 
         window = KeyWindow(
             contentRect: NSRect(origin: .zero, size: size),
@@ -110,13 +113,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             backing:     .buffered,
             defer:       false
         )
-        window.contentView    = iv
+        window.contentView    = imageView
         window.backgroundColor = .white
         window.isOpaque       = true
         window.hasShadow      = true
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.reloadIfChanged()
+        }
+    }
+
+    func modDate() -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: imagePath))?[.modificationDate] as? Date
+    }
+
+    func reloadIfChanged() {
+        guard let mod = modDate(), mod != lastModDate else { return }
+        lastModDate = mod
+        guard let image = NSImage(contentsOfFile: imagePath) else { return }
+        imageView.image = einkSimulate(image)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool { true }
