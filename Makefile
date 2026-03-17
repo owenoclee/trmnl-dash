@@ -27,10 +27,11 @@ preview: $(SERVER) $(VIEWER)
 	 trap "kill 0 2>/dev/null" EXIT INT TERM; \
 	 echo "Waiting for first render…"; \
 	 until curl -sf http://localhost:$(PORT)/api/display >/dev/null 2>&1; do sleep 0.1; done; \
+	 ./$(VIEWER) $(OUT) $(ZOOM); \
 	 fswatch -o $(TMPL) | while read -r _; do \
-	   curl -sf http://localhost:$(PORT)/api/display >/dev/null; \
-	 done & \
-	 ./$(VIEWER) $(OUT) $(ZOOM)
+	   curl -sf http://localhost:$(PORT)/api/display >/dev/null && \
+	   ./$(VIEWER) $(OUT) $(ZOOM); \
+	 done
 
 open: $(SERVER)
 	@DEV=1 ./$(SERVER) --addr :$(PORT) --tmpl $(TMPL) --out $(OUT) & \

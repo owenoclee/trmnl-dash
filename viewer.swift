@@ -2,6 +2,9 @@
 // Borderless image viewer for TRMNL preview
 // Usage: viewer <image.png> [zoom%]
 // Press Q, Escape, or Cmd+W to close
+//
+// Single-instance: if a viewer is already running, sends it SIGUSR1 to reload
+// and exits immediately. The running instance reloads from disk on SIGUSR1.
 import AppKit
 import CoreImage
 
@@ -41,6 +44,34 @@ if args.count >= 3, let explicit = Double(args[2]) {
 } else {
     zoom = autoZoom()
 }
+
+// -- Single-instance via PID file + SIGUSR1 --
+
+let pidFile = "/tmp/trmnl-viewer.pid"
+
+// If another instance is alive, signal it to reload and exit.
+if let existing = try? String(contentsOfFile: pidFile, encoding: .utf8),
+   let pid = pid_t(existing.trimmingCharacters(in: .whitespacesAndNewlines)),
+   kill(pid, 0) == 0 {
+    kill(pid, SIGUSR1)
+    exit(0)
+}
+
+// Write our own PID.
+try? String(ProcessInfo.processInfo.processIdentifier)
+    .write(toFile: pidFile, atomically: true, encoding: .utf8)
+
+// Bridge SIGUSR1 to the main run loop via a pipe (signal handlers must be
+// async-signal-safe, so we just write a byte and handle it on the main queue).
+var sigPipe = [Int32](repeating: 0, count: 2)
+pipe(&sigPipe)
+
+signal(SIGUSR1) { _ in
+    var b: UInt8 = 1
+    write(sigPipe[1], &b, 1)
+}
+
+// -- AppKit --
 
 class KeyWindow: NSWindow {
     override var canBecomeKey: Bool { true }
@@ -90,7 +121,7 @@ func einkSimulate(_ src: NSImage) -> NSImage {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var imageView: NSImageView!
-    var lastModDate: Date?
+    var sigSource: DispatchSourceRead?
 
     func applicationDidFinishLaunching(_: Notification) {
         guard let image = NSImage(contentsOfFile: imagePath) else {
@@ -105,7 +136,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         imageView = NSImageView(frame: NSRect(origin: .zero, size: size))
         imageView.image        = einkSimulate(image)
         imageView.imageScaling = .scaleProportionallyUpOrDown
-        lastModDate = modDate()
 
         window = KeyWindow(
             contentRect: NSRect(origin: .zero, size: size),
@@ -113,28 +143,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             backing:     .buffered,
             defer:       false
         )
-        window.contentView    = imageView
+        window.contentView     = imageView
         window.backgroundColor = .white
-        window.isOpaque       = true
-        window.hasShadow      = true
+        window.isOpaque        = true
+        window.hasShadow       = true
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.reloadIfChanged()
+        // Drain the signal pipe on the main queue and reload on SIGUSR1.
+        let src = DispatchSource.makeReadSource(fileDescriptor: sigPipe[0], queue: .main)
+        src.setEventHandler { [weak self] in
+            var b: UInt8 = 0
+            read(sigPipe[0], &b, 1)
+            self?.reloadImage()
         }
+        src.resume()
+        sigSource = src
     }
 
-    func modDate() -> Date? {
-        (try? FileManager.default.attributesOfItem(atPath: imagePath))?[.modificationDate] as? Date
-    }
-
-    func reloadIfChanged() {
-        guard let mod = modDate(), mod != lastModDate else { return }
-        lastModDate = mod
+    func reloadImage() {
         guard let image = NSImage(contentsOfFile: imagePath) else { return }
         imageView.image = einkSimulate(image)
+    }
+
+    func applicationWillTerminate(_: Notification) {
+        try? FileManager.default.removeItem(atPath: pidFile)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool { true }
