@@ -1,6 +1,6 @@
-# trmnl
+# trmnl-dash
 
-A [Typst](https://typst.app)-based renderer for the [TRMNL](https://usetrmnl.com) ePaper display device, with a local preview tool that roughly simulates the physical device's size and color gamut on a MacBook screen.
+A personal dashboard for the [TRMNL](https://usetrmnl.com) ePaper display device, with a local preview tool that roughly simulates the physical device's size and color gamut on a MacBook screen.
 
 ## Device specs
 
@@ -11,14 +11,6 @@ A [Typst](https://typst.app)-based renderer for the [TRMNL](https://usetrmnl.com
 | Color depth | 16 shades of gray (4-bit grayscale) |
 | Physical PPI | ~227 |
 | Aspect ratio | 4:3 |
-
-## Prerequisites
-
-```bash
-brew install typst go
-# Xcode command line tools for swiftc (already present on most Macs)
-xcode-select --install
-```
 
 ## Usage
 
@@ -47,7 +39,7 @@ It handles all three endpoints the firmware expects:
 make serve
 ```
 
-The server derives its own URL from each incoming request's `Host` header, so no address configuration is needed. Optional overrides:
+Optional overrides:
 
 ```bash
 make serve ADDR=:9090 REFRESH_RATE=900
@@ -55,23 +47,11 @@ make serve ADDR=:9090 REFRESH_RATE=900
 
 ### Device setup
 
+Theoretical - I don't actually have the device yet, I've preordered it :)
+
 In the TRMNL app/firmware, point the device at your Mac's local IP (e.g. `http://192.168.1.100:8080`) instead of the TRMNL cloud. Find it with `ipconfig getifaddr en0`. On first boot the device calls `/api/setup`, receives an API key, and stores it. Subsequent polls hit `/api/display` - the server compiles a fresh PNG and returns its URL; the device downloads and renders it, then sleeps for `refresh_rate` seconds.
 
 Device registrations are persisted to `devices.json` (gitignored).
-
-## Typst page setup
-
-The page dimensions are derived from the device PPI so that
-`typst compile --format png --ppi 227` produces exactly 1872×1404 pixels:
-
-```typst
-#set page(
-  width:  8.247in,   // 1872 / 227
-  height: 6.185in,   // 1404 / 227
-  margin: (x: 0.45in, y: 0.4in),
-  fill:   white,
-)
-```
 
 ## Preview tool (`viewer.swift`)
 
@@ -102,8 +82,7 @@ make preview ZOOM=50
 
 ## Next steps / roadmap
 
-- [x] Web server with `/api/display` endpoint that compiles `.typ` on request
-- [x] Dynamic content injection via `typst compile --input key=value`
-- [x] Real content widgets: weather (Open-Meteo — temp, high/low, wind, hourly chart)
+- [x] Web server with `/api/display` endpoint that returns png
+- [x] Real content widgets: weather (Open-Meteo - temp, high/low, wind, hourly chart)
 - [ ] Post-process output to true 4-bit grayscale (device dithers anyway)
-- [ ] Hot-reload in preview: watch `dashboard.typ` and reopen on change
+- [ ] Hot-reload in preview
