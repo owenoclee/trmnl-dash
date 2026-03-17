@@ -4,3 +4,4 @@ server
 devices.json
 .env
 trmnl-*.html
+.DS_Store
