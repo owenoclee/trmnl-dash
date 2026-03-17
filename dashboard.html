@@ -297,7 +297,7 @@ body.debug .page::before { display: block; }
           .attr('text-anchor', 'start').attr('dominant-baseline', 'auto')
           .attr('font-family', FONT);
         t.append('tspan').attr('font-size', labelFs).text(Math.round(val));
-        t.append('tspan').attr('font-size', unitFs).attr('fill', '#999').attr('dx', 2).text(unit);
+        t.append('tspan').attr('font-size', unitFs).attr('dx', 2).text(unit);
       });
 
       drawIcon(svg, icon, ICON_COL / 2, cy + chartH / 2);
