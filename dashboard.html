@@ -206,7 +206,7 @@ body.debug .page::before { display: block; }
       .style('display', 'block').style('overflow', 'visible');
 
     const series = [
-      { data: sliceDay(DATA.hourlyTemp),   unit: '°C',  icon: 'therm'                  },
+      { data: sliceDay(DATA.hourlyTemp),   unit: 'C',   icon: 'therm'                  },
       { data: sliceDay(DATA.hourlyWind),   unit: 'mph', icon: 'wind'                   },
       { data: sliceDay(DATA.hourlyPrecip), unit: '%',   icon: 'rain', yMin: 0, yMax: 100 },
     ];
