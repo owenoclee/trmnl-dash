@@ -101,10 +101,7 @@ body.debug .page::before { display: block; }
   // ---------------------------------------------------------------------------
   // Fixed constants
   // ---------------------------------------------------------------------------
-  const PT        = 227 / 72;
   const CONTENT_W = 1872 - 2 * 102;
-  const ICON_COL  = 18 * PT;
-  const LABEL_W   = 22 * PT;
   const N_DAY     = 16;
   const GRID_SW   = 1;
   const FONT      = "'Inter', system-ui, sans-serif";
@@ -113,7 +110,6 @@ body.debug .page::before { display: block; }
   // Tunable config — driven by sliders in browser preview, fixed at render time
   // ---------------------------------------------------------------------------
   const cfg = {
-    iconGap:  50,                   // gap between icon column and chart area
     hExt:     0,                    // h-line left overhang past chart edge
     labelGap: 14,                   // gap between chart edge and y-axis label
     notch:    9,                    // v-line notch depth (px into chart)
@@ -170,32 +166,11 @@ body.debug .page::before { display: block; }
   }
 
   // ---------------------------------------------------------------------------
-  // Icons — Lucide (MIT), 24×24 viewBox
-  // ---------------------------------------------------------------------------
-  function drawIcon(svg, type, cx, cy) {
-    const size  = ICON_COL * 0.78;
-    const scale = size / 24;
-    const g = svg.append('g').attr('transform',
-      `translate(${cx - size/2}, ${cy - size/2}) scale(${scale})`);
-    const s = el => el.attr('fill','none').attr('stroke','black')
-      .attr('stroke-width',2).attr('stroke-linecap','round').attr('stroke-linejoin','round');
-    if (type === 'therm') {
-      s(g.append('path').attr('d', 'M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z'));
-    } else if (type === 'wind') {
-      for (const d of ['M12.8 19.6A2 2 0 1 0 14 16H2','M17.5 8a2.5 2.5 0 1 1 2 4H2','M9.8 4.4A2 2 0 1 1 11 8H2'])
-        s(g.append('path').attr('d', d));
-    } else if (type === 'rain') {
-      for (const d of ['M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242','M16 14v6','M8 14v6','M12 16v6'])
-        s(g.append('path').attr('d', d));
-    }
-  }
-
-  // ---------------------------------------------------------------------------
   // Render — clears and redraws the chart SVG from current cfg
   // ---------------------------------------------------------------------------
   function render() {
-    const { iconGap, hExt, labelGap, notch, notchSm, vExt, chartW, chartH, chartGap, labelFs } = cfg;
-    const chartX0 = ICON_COL + iconGap;
+    const { hExt, labelGap, notch, notchSm, vExt, chartW, chartH, chartGap, labelFs } = cfg;
+    const chartX0 = 0;
     const chartX1 = Math.round(chartX0 + chartW) + 1; // right edge of the pixel column the right tick occupies
     const chartsH = 3 * chartH + 2 * chartGap;
     const svgH    = chartsH + vExt + labelFs + 4;
@@ -206,9 +181,9 @@ body.debug .page::before { display: block; }
       .style('display', 'block').style('overflow', 'visible');
 
     const series = [
-      { data: sliceDay(DATA.hourlyTemp),   unit: 'C',   icon: 'therm'                  },
-      { data: sliceDay(DATA.hourlyWind),   unit: 'mph', icon: 'wind'                   },
-      { data: sliceDay(DATA.hourlyPrecip), unit: '%',   icon: 'rain', yMin: 0, yMax: 100 },
+      { data: sliceDay(DATA.hourlyTemp),   unit: 'C',   name: 'Temperature'            },
+      { data: sliceDay(DATA.hourlyWind),   unit: 'mph', name: 'Wind Speed'             },
+      { data: sliceDay(DATA.hourlyPrecip), unit: '%',   name: 'Precip Chance', yMin: 0, yMax: 100 },
     ];
 
     // Pre-compute scales for each series (needed across passes)
@@ -267,8 +242,8 @@ body.debug .page::before { display: block; }
         .attr('font-size', labelFs).attr('font-family', FONT).text(label);
     });
 
-    // Pass 3 — h-lines, labels, icons (on top of blend-mode ticks, covering intersection artifacts)
-    series.forEach(({ unit, icon }, ci) => {
+    // Pass 3 — h-lines, labels, chart name (on top of blend-mode ticks, covering intersection artifacts)
+    series.forEach(({ unit, name }, ci) => {
       const { cy, dMin, dMax } = scales[ci];
 
       [0, 0.5, 1].forEach(frac => {
@@ -287,7 +262,7 @@ body.debug .page::before { display: block; }
 
       const lx   = chartX0 + chartW + labelGap;
       const capH = labelFs * 0.72;
-      const unitFs = Math.round(labelFs * 0.76);
+      const unitFs = Math.round(labelFs * 0.85);
       [
         { val: dMax,              y: cy + capH                   },
         { val: (dMin + dMax) / 2, y: cy + chartH / 2 + capH / 2 },
@@ -300,7 +275,12 @@ body.debug .page::before { display: block; }
         t.append('tspan').attr('font-size', unitFs).attr('dx', 2).text(unit);
       });
 
-      drawIcon(svg, icon, ICON_COL / 2, cy + chartH / 2);
+      svg.append('text')
+        .attr('x', chartX0).attr('y', cy - labelFs * 0.4)
+        .attr('dominant-baseline', 'auto')
+        .attr('font-size', labelFs * 0.8).attr('font-family', FONT)
+        .attr('fill', 'black')
+        .text(name);
     });
   }
 
@@ -337,7 +317,6 @@ body.debug .page::before { display: block; }
       { key: 'chartGap', label: 'Gap between charts',  min: 0,    max: 150,  step: 2   },
       { key: 'hExt',     label: 'H-line overhang',     min: 0,    max: 100,  step: 1   },
       { key: 'labelGap', label: 'Label ↔ h-line gap',  min: 0,    max: 30,   step: 1   },
-      { key: 'iconGap',  label: 'Icon ↔ chart gap',    min: 0,    max: 80,   step: 1   },
       { key: 'notch',    label: 'Notch depth',         min: 0,    max: 80,   step: 1   },
       { key: 'notchSm',  label: 'Minor notch depth',   min: 0,    max: 40,   step: 1   },
       { key: 'vExt',     label: 'V-line overhang',     min: 0,    max: 100,  step: 1   },
