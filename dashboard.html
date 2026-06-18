@@ -9,6 +9,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
+  position: relative;
   width: 1872px;
   height: 1404px;
   background: white;
@@ -39,6 +40,40 @@ body {
   z-index: 999;
 }
 body.debug .page::before { display: block; }
+
+/* Debug: dashed line through the horizontal center of the page */
+.page::after {
+  content: '';
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 935px;
+  width: 2px;
+  height: 1404px;
+  border-left: 2px dashed black;
+  pointer-events: none;
+  z-index: 999;
+}
+body.debug .page::after { display: block; }
+
+/* Debug: two dashed lines marking a center gutter as wide as the page
+   margin (102px), i.e. ±51px from the center line — for a two-column layout */
+body::before,
+body::after {
+  content: '';
+  display: none;
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 1404px;
+  border-left: 2px dashed black;
+  pointer-events: none;
+  z-index: 999;
+}
+body::before { left: 884px; }  /* center 936 − 51 */
+body::after  { left: 986px; }  /* center 936 + 51 */
+body.debug::before,
+body.debug::after { display: block; }
 
 /* 64pt at 227ppi */
 .temp {
