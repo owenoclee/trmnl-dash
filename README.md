@@ -40,9 +40,9 @@ It handles all three endpoints the firmware expects:
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/setup` | One-time device provisioning - issues an API key |
-| `GET /api/display` | Main poll - compiles `dashboard.typ` on demand and returns the image URL |
-| `POST /api/log` | Device diagnostics - logs payload and returns 204 |
+| `GET /api/setup` | Device provisioning handshake — issues an API key keyed to the device MAC |
+| `GET /api/display` | Main poll — renders `dashboard.html` via headless Chrome and returns the image URL |
+| `POST /api/log` | Device diagnostics — logs the payload and returns 204 |
 
 ### Running
 
@@ -58,9 +58,16 @@ make serve ADDR=:9090 REFRESH_RATE=900
 
 ### Device setup
 
-Theoretical - I don't actually have the device yet, I've preordered it :)
+The device points at this server instead of the TRMNL cloud. Find your Mac's LAN IP with `ipconfig getifaddr en0` (e.g. `192.168.0.68`); the device must join the same network.
 
-In the TRMNL app/firmware, point the device at your Mac's local IP (e.g. `http://192.168.1.100:8080`) instead of the TRMNL cloud. Find it with `ipconfig getifaddr en0`. On first boot the device calls `/api/setup`, receives an API key, and stores it. Subsequent polls hit `/api/display` - the server compiles a fresh PNG and returns its URL; the device downloads and renders it, then sleeps for `refresh_rate` seconds.
+On the TRMNL X (10.3", touchbar, no power button — it powers on via the magnetic charging dock):
+
+1. **Enter pairing mode:** hold both ends of the touchbar until the screen blinks, then hold the middle to confirm. The device broadcasts a `TRMNL` Wi-Fi network.
+2. **Join that network** from a phone or laptop — a captive portal opens.
+3. **Set the custom server:** go to **Advanced → Custom Server → Yes** and enter `http://<lan-ip>:8080`, with no trailing slash (the firmware appends `/api/...` itself).
+4. **Back out, pick your home Wi-Fi, and connect.**
+
+The TRMNL X ships pre-provisioned with an API token, so it polls `/api/display` directly with that token rather than going through `/api/setup`. The server adopts the token on first contact, registers the device, and serves the dashboard; the device downloads the PNG and sleeps for `refresh_rate` seconds between polls. (`/api/setup` remains available for firmware that provisions by calling it.)
 
 Device registrations are persisted to `devices.json` (gitignored).
 

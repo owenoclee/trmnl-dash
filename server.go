@@ -436,6 +436,28 @@ func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, tmpl
 
 		registryMu.Lock()
 		d, ok := byKey[token]
+		if !ok && token != "" {
+			// Newer firmware (TRMNL X / FW 1.8.x) ships pre-provisioned with an
+			// API token and never calls /api/setup — it polls /api/display
+			// directly with that token. The original handshake assumed the
+			// device would mint its key via /api/setup, so an unknown token got
+			// a 202 ("not set up"), which is what drives the device to show its
+			// built-in "visit trmnl.com/start" screen. On a personal LAN server
+			// we trust the device on first contact: adopt the token it presents.
+			mac := strings.ToLower(r.Header.Get("ID"))
+			d = &Device{
+				MAC:        mac,
+				APIKey:     token,
+				FriendlyID: randString(6),
+				CreatedAt:  time.Now(),
+			}
+			byKey[token] = d
+			if mac != "" {
+				byMAC[mac] = d
+			}
+			ok = true
+			log.Printf("[display] adopted pre-provisioned device mac=%s friendly_id=%s", mac, d.FriendlyID)
+		}
 		if ok {
 			d.LastSeen = time.Now()
 			d.BatteryVoltage = r.Header.Get("Battery-Voltage")
@@ -446,7 +468,7 @@ func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, tmpl
 		registryMu.Unlock()
 
 		if !ok {
-			log.Printf("[display] unknown token, returning 202")
+			log.Printf("[display] empty token, returning 202")
 			writeJSON(w, http.StatusOK, map[string]any{"status": 202})
 			return
 		}
