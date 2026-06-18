@@ -40,8 +40,8 @@ It handles all three endpoints the firmware expects:
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/setup` | Device provisioning handshake — issues an API key keyed to the device MAC |
-| `GET /api/display` | Main poll — renders `dashboard.html` via headless Chrome and returns the image URL |
+| `GET /api/setup` | Provisioning handshake — issues an API key + friendly ID for the device MAC. Only called by firmware that has **no key stored** (see below). |
+| `GET /api/display` | Main poll — adopts the device's token on first contact, renders `dashboard.html` via headless Chrome, returns the image URL |
 | `POST /api/log` | Device diagnostics — logs the payload and returns 204 |
 
 ### Running
@@ -67,7 +67,15 @@ On the TRMNL X (10.3", touchbar, no power button — it powers on via the magnet
 3. **Set the custom server:** go to **Advanced → Custom Server → Yes** and enter `http://<lan-ip>:8080`, with no trailing slash (the firmware appends `/api/...` itself).
 4. **Back out, pick your home Wi-Fi, and connect.**
 
-The TRMNL X ships pre-provisioned with an API token, so it polls `/api/display` directly with that token rather than going through `/api/setup`. The server adopts the token on first contact, registers the device, and serves the dashboard; the device downloads the PNG and sleeps for `refresh_rate` seconds between polls. (`/api/setup` remains available for firmware that provisions by calling it.)
+The device downloads the PNG and sleeps for `refresh_rate` seconds between polls.
+
+### How the device authenticates
+
+The firmware stores a **single API key, independent of the server URL**, and only calls `/api/setup` when it has **no key stored locally**. A device first claimed against TRMNL's cloud at unboxing (with its Friendly ID) already holds a cloud-issued key — so when you point it here it **skips `/api/setup` entirely** and polls `/api/display` directly, presenting that pre-existing key. Switching to a custom server does not clear the key; only a full device reset does.
+
+So in practice `/api/setup` may never be hit. To handle that, `/api/display` **adopts** any unrecognised non-empty token on first contact: it registers the device under the token it presents (keyed by MAC) and serves the dashboard, instead of rejecting it. Without this the firmware reads an unknown token as "not set up" and shows its built-in _visit trmnl.com/start_ screen.
+
+`/api/setup` is still implemented and correct for the case it does fire: a freshly-reset device (no stored key) pointed here calls `GET /api/setup` with its MAC, the server issues an API key + friendly ID, the device stores them, and subsequent polls authenticate normally.
 
 Device registrations are persisted to `devices.json` (gitignored).
 
@@ -102,5 +110,5 @@ make preview ZOOM=50
 
 - [x] Web server with `/api/display` endpoint that returns png
 - [x] Real content widgets: weather (Open-Meteo - temp, high/low, wind, hourly chart)
-- [ ] Post-process output to true 4-bit grayscale (device dithers anyway)
+- [ ] Restrict device access: allow-list or auth flow (`/api/display` currently adopts any non-empty token on first contact)
 - [x] Hot-reload in preview
