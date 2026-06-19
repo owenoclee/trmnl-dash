@@ -99,10 +99,10 @@
       display: block;
     }
 
-    /* 51pt at 227ppi */
+    /* 46pt at 227ppi */
     .temp {
       font-family: 'Inter', system-ui, sans-serif;
-      font-size: 160px;
+      font-size: 144px;
       font-weight: 700;
       line-height: 1;
       white-space: nowrap;
@@ -157,6 +157,65 @@
       height: 380px;
       border-radius: 32px;
     }
+
+    /* Calendar — top third of the right column. */
+    .calendar {
+      position: absolute;
+      left: 987px;
+      /* right column left edge (gutter right) */
+      top: 91px;
+      /* content top */
+      width: 783px;
+      /* right column width */
+      height: 400px;
+      /* ~1/3 of the 1222px content height */
+      display: flex;
+      flex-direction: column;
+    }
+
+    .cal-title {
+      font-size: 48px;
+      font-weight: 700;
+      white-space: nowrap;
+      margin-bottom: 28px;
+    }
+
+    .cal-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      grid-auto-rows: 1fr;
+      gap: 6px;
+      padding: 6px;
+      /* == gap, so the border sits one cell-gap from the cells */
+      border: 1px solid black;
+      border-radius: 16px;
+    }
+
+    .cal-head,
+    .cal-day {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .cal-head {
+      font-size: 28px;
+      font-weight: 600;
+      color: #606060;
+      /* muted weekday letters */
+    }
+
+    .cal-day {
+      font-size: 34px;
+    }
+
+    /* Today: filled black cell with white number. */
+    .cal-today {
+      background: black;
+      color: white;
+      border-radius: 12px;
+    }
   </style>
 </head>
 
@@ -176,6 +235,11 @@
 
     <div class="photo">
       <canvas id="photo-canvas"></canvas>
+    </div>
+
+    <div class="calendar">
+      <div class="cal-title" id="cal-title"></div>
+      <div class="cal-grid" id="cal-grid"></div>
     </div>
 
   </div>
@@ -427,7 +491,71 @@
       }
       if (DATA.debug) document.body.classList.add('debug');
 
+      // ---------------------------------------------------------------------------
+      // Optical alignment — shift the whole conditions row so the big temperature's
+      // INK (not its line box) sits flush with the top-left of the content area:
+      // corrects the font's left side bearing and the gap above the cap height. The
+      // row is widened by the x shift so the right-aligned summary stays pinned to
+      // the gutter. Measured per render so it tracks the value's leading glyph.
+      // ---------------------------------------------------------------------------
+      function alignTemp() {
+        const conditions = document.querySelector('.conditions');
+        const el = document.querySelector('.temp');
+        const cs = getComputedStyle(el);
+        const ctx = document.createElement('canvas').getContext('2d');
+        ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+        ctx.textBaseline = 'alphabetic';
+        const m = ctx.measureText(el.textContent);
+
+        // Baseline position within the temp's line box (DOM probe, exact).
+        const probe = document.createElement('span');
+        probe.style.cssText = 'display:inline-block;width:0;height:0';
+        el.appendChild(probe);
+        const baselineFromTop = probe.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        el.removeChild(probe);
+
+        const inkLeft = -m.actualBoundingBoxLeft;                    // box-left → leftmost ink
+        const inkTop = baselineFromTop - m.actualBoundingBoxAscent;  // box-top  → topmost ink
+        conditions.style.width = (COL_W + inkLeft) + 'px';           // widen to offset the left shift
+        conditions.style.transform = `translate(${-inkLeft}px, ${-inkTop}px)`;
+      }
+      if (document.fonts && !document.fonts.check('700 144px Inter')) document.fonts.ready.then(alignTemp);
+      else alignTemp();
+
       render();
+
+      // ---------------------------------------------------------------------------
+      // Calendar — current month grid (Monday-first) with today highlighted.
+      // Date is computed at render time from the host clock.
+      // ---------------------------------------------------------------------------
+      (function buildCalendar() {
+        const now = new Date();
+        const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const MO = ['January', 'February', 'March', 'April', 'May', 'June',
+          'July', 'August', 'September', 'October', 'November', 'December'];
+        const ordinal = n => {const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]);};
+        document.getElementById('cal-title').textContent =
+          `${WD[now.getDay()]} ${ordinal(now.getDate())} ${MO[now.getMonth()]}`;
+
+        const grid = document.getElementById('cal-grid');
+        ['M', 'T', 'W', 'T', 'F', 'S', 'S'].forEach(d => {
+          const el = document.createElement('div');
+          el.className = 'cal-head';
+          el.textContent = d;
+          grid.appendChild(el);
+        });
+
+        const y = now.getFullYear(), m = now.getMonth();
+        const lead = (new Date(y, m, 1).getDay() + 6) % 7;   // empty cells before the 1st (Mon-first)
+        const days = new Date(y, m + 1, 0).getDate();
+        for (let i = 0; i < lead; i++) grid.appendChild(document.createElement('div'));
+        for (let d = 1; d <= days; d++) {
+          const el = document.createElement('div');
+          el.className = 'cal-day' + (d === now.getDate() ? ' cal-today' : '');
+          el.textContent = d;
+          grid.appendChild(el);
+        }
+      })();
 
       // ---------------------------------------------------------------------------
       // Photo — pick one of the server's images at random and dither it (1-bit
@@ -435,7 +563,7 @@
       // left slot. The headless renderer waits on window.__renderDone before capture.
       // ---------------------------------------------------------------------------
       window.__renderDone = false;
-      const renderDone = () => { window.__renderDone = true; };
+      const renderDone = () => {window.__renderDone = true;};
       setTimeout(renderDone, 4000);   // backstop: never block the screenshot forever
 
       // Dither knobs — edits hot-reload on the next render.
@@ -445,8 +573,8 @@
       };
 
       const PHOTOS = (() => {
-        try { return JSON.parse(document.getElementById('photos-data').textContent) || []; }
-        catch (e) { return []; }
+        try {return JSON.parse(document.getElementById('photos-data').textContent) || [];}
+        catch (e) {return [];}
       })();
 
       // Quantise a value to the nearest of `levels` evenly-spaced grays.
@@ -501,11 +629,11 @@
         const img = new Image();
         img.crossOrigin = 'anonymous';     // CORS-clean so getImageData isn't tainted
         img.onload = () => {
-          try { paintDither(document.getElementById('photo-canvas'), img); }
-          catch (e) { console.error('dither failed', e); }
+          try {paintDither(document.getElementById('photo-canvas'), img);}
+          catch (e) {console.error('dither failed', e);}
           requestAnimationFrame(renderDone);   // ensure the canvas paints before capture
         };
-        img.onerror = () => { console.error('photo load failed', img.src); renderDone(); };
+        img.onerror = () => {console.error('photo load failed', img.src); renderDone();};
         img.src = PHOTOS[Math.floor(Math.random() * PHOTOS.length)];
       } else {
         renderDone();
