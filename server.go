@@ -7,6 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"log"
 	"math"
@@ -21,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -56,6 +60,11 @@ var (
 	// must be CORS-clean so the canvas dithering pass can read pixels back).
 	photosDir     string
 	renderBaseURL string
+
+	// lastRenderUnix is the time of the most recent successful render, used as the
+	// image cache-buster. Read/written atomically (the render loop and request
+	// handlers touch it from different goroutines).
+	lastRenderUnix int64
 )
 
 // -- registry persistence --
@@ -368,6 +377,36 @@ func initChrome() error {
 	return chromeErr
 }
 
+// optimizePNG converts the RGB screenshot into a 16-level grayscale PNG — exactly
+// what the e-ink panel can display — which roughly halves the device's download
+// (8-bit RGB → 4-bit indexed) while looking identical on the panel. Falls back to
+// the original bytes if anything goes wrong.
+func optimizePNG(raw []byte) []byte {
+	src, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		log.Printf("[render] optimize decode: %v", err)
+		return raw
+	}
+	b := src.Bounds()
+	pal := make(color.Palette, 16)
+	for i := range pal {
+		pal[i] = color.Gray{Y: uint8(i * 255 / 15)}
+	}
+	dst := image.NewPaletted(b, pal)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, _, _, _ := src.At(x, y).RGBA()
+			dst.SetColorIndex(x, y, uint8((int(r>>8)*15+127)/255)) // nearest of 16 levels
+		}
+	}
+	var out bytes.Buffer
+	if err := (&png.Encoder{CompressionLevel: png.BestCompression}).Encode(&out, dst); err != nil {
+		log.Printf("[render] optimize encode: %v", err)
+		return raw
+	}
+	return out.Bytes()
+}
+
 func renderHTML(tmplPath, pngOut string, data dashboardData) error {
 	renderMu.Lock()
 	defer renderMu.Unlock()
@@ -408,7 +447,12 @@ func renderHTML(tmplPath, pngOut string, data dashboardData) error {
 	); err != nil {
 		return fmt.Errorf("chromedp: %w", err)
 	}
-	return os.WriteFile(absPNG, buf, 0644)
+	buf = optimizePNG(buf)
+	if err := os.WriteFile(absPNG, buf, 0644); err != nil {
+		return err
+	}
+	atomic.StoreInt64(&lastRenderUnix, time.Now().Unix())
+	return nil
 }
 
 // -- helpers --
@@ -496,6 +540,24 @@ func handleSetup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// currentDashboardData gathers everything the template needs for a render:
+// (cached) weather plus the photo list. Used by both the background render loop
+// and the on-demand dev/preview path.
+func currentDashboardData(lat, lon float64, location string) dashboardData {
+	var data dashboardData
+	if !math.IsNaN(lat) && !math.IsNaN(lon) {
+		wd, err := fetchWeather(lat, lon)
+		if err != nil {
+			log.Printf("[weather] unavailable: %v", err)
+		} else {
+			data = buildDashboard(wd)
+		}
+	}
+	data.PhotosJSON = photosJSON() // independent of weather
+	_ = location                   // retained for future footer use
+	return data
+}
+
 func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, tmplSrc, pngOut string, lat, lon float64, location string) {
 	if !devMode {
 		token := r.Header.Get("Access-Token")
@@ -547,29 +609,24 @@ func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, tmpl
 		)
 	}
 
-	var data dashboardData
-	if !math.IsNaN(lat) && !math.IsNaN(lon) {
-		wd, err := fetchWeather(lat, lon)
-		if err != nil {
-			log.Printf("[weather] unavailable: %v", err)
-		} else {
-			data = buildDashboard(wd)
+	// In dev/preview the render is driven on demand (the fswatch loop curls this
+	// endpoint after each edit), so render synchronously here. In production the
+	// background loop keeps dashboard.png fresh, so the device never waits on a
+	// render — we just hand back the latest pre-rendered image instantly.
+	if devMode {
+		if err := renderHTML(tmplSrc, pngOut, currentDashboardData(lat, lon, location)); err != nil {
+			log.Printf("[display] render error: %v", err)
+			writeJSON(w, http.StatusOK, map[string]any{"status": 500})
+			return
 		}
 	}
-	data.PhotosJSON = photosJSON() // independent of weather
-	_ = location                   // retained for future footer use
 
-	if err := renderHTML(tmplSrc, pngOut, data); err != nil {
-		log.Printf("[display] render error: %v", err)
-		writeJSON(w, http.StatusOK, map[string]any{"status": 500})
-		return
-	}
-
-	imageURL := fmt.Sprintf("%s/dashboard.png?t=%d", baseURL(r), time.Now().Unix())
+	ts := atomic.LoadInt64(&lastRenderUnix)
+	imageURL := fmt.Sprintf("%s/dashboard.png?t=%d", baseURL(r), ts)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":          0,
 		"image_url":       imageURL,
-		"filename":        fmt.Sprintf("dashboard-%s", time.Now().Format("2006-01-02T15:04:05")),
+		"filename":        fmt.Sprintf("dashboard-%d", ts),
 		"refresh_rate":    refreshRate,
 		"update_firmware": false,
 		"reset_firmware":  false,
@@ -599,6 +656,7 @@ func main() {
 	pngOut      := flag.String("out", "dashboard.png", "PNG output path")
 	dp          := flag.String("devices", "devices.json", "Device registry file")
 	photos      := flag.String("photos", "photos", "Directory of images to cycle through")
+	renderEvery := flag.Int("render-interval", 300, "Seconds between background re-renders (production)")
 	lat         := flag.Float64("lat", envFloat("TRMNL_LAT"), "Weather latitude (or set TRMNL_LAT)")
 	lon         := flag.Float64("lon", envFloat("TRMNL_LON"), "Weather longitude (or set TRMNL_LON)")
 	location    := flag.String("location", os.Getenv("TRMNL_LOCATION"), "Location name (or set TRMNL_LOCATION)")
@@ -639,6 +697,33 @@ func main() {
 	log.Printf("  devices file:   %s", devicesPath)
 	log.Printf("  devices loaded: %d", len(byMAC))
 	log.Printf("  photos:         %s (%d found)", photosDir, len(listPhotoURLs()))
+	if !devMode {
+		log.Printf("  render-every:   %ds (pre-rendered; device polls never wait on a render)", *renderEvery)
+	}
 
-	log.Fatal(http.ListenAndServe(*addr, mux))
+	// Bind the listener before the first render so the headless Chrome can fetch
+	// /photos over HTTP during that initial render.
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", *addr, err)
+	}
+	go func() { log.Fatalf("serve: %v", http.Serve(ln, mux)) }()
+
+	if !devMode {
+		renderOnce := func() {
+			if err := renderHTML(*tmplSrc, *pngOut, currentDashboardData(*lat, *lon, *location)); err != nil {
+				log.Printf("[render] %v", err)
+			}
+		}
+		renderOnce() // initial render so the very first device poll already has an image
+		go func() {
+			t := time.NewTicker(time.Duration(*renderEvery) * time.Second)
+			defer t.Stop()
+			for range t.C {
+				renderOnce()
+			}
+		}()
+	}
+
+	select {} // serve + render run in goroutines; block forever
 }
