@@ -11,10 +11,13 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +49,13 @@ var (
 	byKey       = make(map[string]*Device)
 	renderMu    sync.Mutex
 	devicesPath string
+
+	// photosDir holds the images cycled into the dashboard's bottom-left slot.
+	// renderBaseURL is the loopback URL the headless render uses to fetch them
+	// (the page is loaded from file://, so photo <img> src must be absolute, and
+	// must be CORS-clean so the canvas dithering pass can read pixels back).
+	photosDir     string
+	renderBaseURL string
 )
 
 // -- registry persistence --
@@ -228,9 +238,13 @@ type dashJSON struct {
 	HourlyPrecip []float64 `json:"hourlyPrecip"`
 }
 
-// dashboardData is the Go template context — a single JSON blob, nothing else.
+// dashboardData is the Go template context. DataJSON carries the weather blob
+// (empty when weather is unconfigured, which makes the page fall back to its
+// built-in sample data); PhotosJSON is injected independently so the photo
+// cycling works regardless of whether weather is available.
 type dashboardData struct {
-	DataJSON template.JS
+	DataJSON   template.JS
+	PhotosJSON template.JS
 }
 
 func buildDashboard(wd *weatherData) dashboardData {
@@ -248,6 +262,54 @@ func buildDashboard(wd *weatherData) dashboardData {
 	}
 	jsonBytes, _ := json.Marshal(d)
 	return dashboardData{DataJSON: template.JS(jsonBytes)}
+}
+
+// photoExts is the set of image types served from the photos directory.
+var photoExts = map[string]bool{
+	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
+}
+
+// listPhotoURLs returns absolute loopback URLs for every image in photosDir,
+// sorted for stable ordering. The page picks one at random per render, so each
+// /api/display fetch re-rolls (a fresh template parse + page load every time).
+func listPhotoURLs() []string {
+	if photosDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(photosDir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if photoExts[strings.ToLower(filepath.Ext(e.Name()))] {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	urls := make([]string, 0, len(names))
+	for _, n := range names {
+		urls = append(urls, renderBaseURL+"/photos/"+url.PathEscape(n))
+	}
+	return urls
+}
+
+func photosJSON() template.JS {
+	b, _ := json.Marshal(listPhotoURLs())
+	return template.JS(b)
+}
+
+// loopbackURL turns a listen address (":8080", "0.0.0.0:8080") into the
+// loopback URL the local headless browser uses to fetch photos during a render.
+func loopbackURL(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		port = "8080"
+	}
+	return "http://127.0.0.1:" + port
 }
 
 // -- Chrome rendering --
@@ -338,6 +400,10 @@ func renderHTML(tmplPath, pngOut string, data dashboardData) error {
 	if err := chromedp.Run(chromeCtx,
 		chromedp.EmulateViewport(1872, 1404),
 		chromedp.Navigate("file://"+absHTML),
+		// Wait for the page to finish charts + async photo load/dither. The page
+		// always sets this flag (incl. a self-timeout backstop), so this resolves
+		// promptly even when there's no photo or the photo fails to load.
+		chromedp.Poll("window.__renderDone === true", nil, chromedp.WithPollingTimeout(8*time.Second)),
 		chromedp.CaptureScreenshot(&buf),
 	); err != nil {
 		return fmt.Errorf("chromedp: %w", err)
@@ -490,7 +556,8 @@ func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, tmpl
 			data = buildDashboard(wd)
 		}
 	}
-	_ = location // retained for future footer use
+	data.PhotosJSON = photosJSON() // independent of weather
+	_ = location                   // retained for future footer use
 
 	if err := renderHTML(tmplSrc, pngOut, data); err != nil {
 		log.Printf("[display] render error: %v", err)
@@ -531,12 +598,15 @@ func main() {
 	tmplSrc     := flag.String("tmpl", "dashboard.html", "HTML template source")
 	pngOut      := flag.String("out", "dashboard.png", "PNG output path")
 	dp          := flag.String("devices", "devices.json", "Device registry file")
+	photos      := flag.String("photos", "photos", "Directory of images to cycle through")
 	lat         := flag.Float64("lat", envFloat("TRMNL_LAT"), "Weather latitude (or set TRMNL_LAT)")
 	lon         := flag.Float64("lon", envFloat("TRMNL_LON"), "Weather longitude (or set TRMNL_LON)")
 	location    := flag.String("location", os.Getenv("TRMNL_LOCATION"), "Location name (or set TRMNL_LOCATION)")
 	flag.Parse()
 
 	devicesPath = *dp
+	photosDir = *photos
+	renderBaseURL = loopbackURL(*addr)
 	rand.Seed(time.Now().UnixNano()) //nolint:staticcheck
 	loadRegistry(devicesPath)
 
@@ -548,6 +618,13 @@ func main() {
 	mux.HandleFunc("POST /api/log", handleLog)
 	mux.HandleFunc("GET /dashboard.png", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, *pngOut)
+	})
+	// Photos are read back into a <canvas> for dithering, so they must be
+	// CORS-clean (the page renders from a file:// origin).
+	photoFS := http.StripPrefix("/photos/", http.FileServer(http.Dir(photosDir)))
+	mux.HandleFunc("GET /photos/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		photoFS.ServeHTTP(w, r)
 	})
 
 	log.Printf("TRMNL BYOS server (html-stack)")
@@ -561,6 +638,7 @@ func main() {
 	log.Printf("  template:       %s", *tmplSrc)
 	log.Printf("  devices file:   %s", devicesPath)
 	log.Printf("  devices loaded: %d", len(byMAC))
+	log.Printf("  photos:         %s (%d found)", photosDir, len(listPhotoURLs()))
 
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
