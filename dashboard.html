@@ -1,397 +1,573 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
-<style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-body {
-  position: relative;
-  width: 1872px;
-  height: 1404px;
-  background: white;
-  color: black;
-  font-family: 'Inter', system-ui, sans-serif;
-  overflow: hidden;
-}
-
-.page {
-  position: relative;
-  width: 1872px;
-  height: 1404px;
-  /* margins: 0.4in × 0.45in at 227ppi = 91px × 102px */
-  padding: 91px 102px;
-}
-
-/* Debug: dotted rectangle showing the content margin boundary */
-.page::before {
-  content: '';
-  display: none;
-  position: absolute;
-  top: 91px;
-  left: 102px;
-  width: 1668px;
-  height: 1222px;
-  border: 2px dotted black;
-  pointer-events: none;
-  z-index: 999;
-}
-body.debug .page::before { display: block; }
-
-/* Debug: dashed line through the horizontal center of the page */
-.page::after {
-  content: '';
-  display: none;
-  position: absolute;
-  top: 0;
-  left: 935px;
-  width: 2px;
-  height: 1404px;
-  border-left: 2px dashed black;
-  pointer-events: none;
-  z-index: 999;
-}
-body.debug .page::after { display: block; }
-
-/* Debug: two dashed lines marking a center gutter as wide as the page
-   margin (102px), i.e. ±51px from the center line — for a two-column layout */
-body::before,
-body::after {
-  content: '';
-  display: none;
-  position: absolute;
-  top: 0;
-  width: 2px;
-  height: 1404px;
-  border-left: 2px dashed black;
-  pointer-events: none;
-  z-index: 999;
-}
-body::before { left: 884px; }  /* center 936 − 51 */
-body::after  { left: 986px; }  /* center 936 + 51 */
-body.debug::before,
-body.debug::after { display: block; }
-
-/* 64pt at 227ppi */
-.temp {
-  font-family: 'Inter', system-ui, sans-serif;
-  font-size: 202px;
-  font-weight: 700;
-  line-height: 1;
-  white-space: nowrap;
-  letter-spacing: -3px;
-}
-
-.conditions {
-  display: flex;
-  align-items: center;
-  gap: 63px;
-  margin-bottom: 44px;
-}
-
-/* 20pt */
-.condition { font-size: 63px; margin-bottom: 13px; }
-
-/* 13pt */
-.details { font-size: 41px; color: #606060; }
-</style>
-</head>
-<body>
-<div class="page">
-
-  <div class="conditions">
-    <div class="temp"><span id="w-temp">—</span>°C</div>
-    <div>
-      <div class="condition" id="w-condition" style="display:none"></div>
-      <div class="details">High <span id="w-high">—</span>&deg;&nbsp;&middot;&nbsp;Low <span id="w-low">—</span>&deg;&nbsp;&middot;&nbsp;Wind <span id="w-wind">—</span> mph</div>
-    </div>
-  </div>
-
-  <div class="charts"></div>
-
-</div>
-
-<!-- D3 — loaded from CDN (works both in headless Chrome render and direct browser preview) -->
-<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-
-<!-- Chart data: Go injects JSON here; falls back to fake data when opened directly -->
-<script type="application/json" id="chart-data">{{.DataJSON}}</script>
-
-<!-- Chart rendering — pure presentation, no data fetching -->
-<script>
-(function () {
-  const DATA = (() => {
-    try { return JSON.parse(document.getElementById('chart-data').textContent); } catch (e) {}
-    return {
-      temp: 11.4, tempMin: 7.8, tempMax: 14.6, windMPH: 17.3, condition: 'Partly cloudy', debug: true,
-      hourlyTemp:   [7.2,7.8,6.9,7.1,7.4,8.3,9.1,10.4,11.2,12.7,13.1,14.3,14.6,14.8,13.9,12.4,11.8,10.9,9.7,9.2,8.6,8.1,7.8,7.5],
-      hourlyWind:   [14.2,13.8,12.9,13.7,15.1,16.4,17.8,19.5,21.3,22.7,21.9,19.6,17.3,16.8,15.4,16.2,17.9,18.6,17.4,15.8,14.5,13.7,12.9,12.1],
-      hourlyPrecip: [0,0,0,0,0,0,0,5,12,22,31,43,52,46,33,21,14,9,4,0,0,0,0,0],
-    };
-  })();
-
-  // ---------------------------------------------------------------------------
-  // Fixed constants
-  // ---------------------------------------------------------------------------
-  const CONTENT_W = 1872 - 2 * 102;
-  const N_DAY     = 16;
-  const GRID_SW   = 1;
-  const FONT      = "'Inter', system-ui, sans-serif";
-
-  // ---------------------------------------------------------------------------
-  // Tunable config — driven by sliders in browser preview, fixed at render time
-  // ---------------------------------------------------------------------------
-  const cfg = {
-    hExt:     0,                    // h-line left overhang past chart edge
-    labelGap: 14,                   // gap between chart edge and y-axis label
-    notch:    9,                    // v-line notch depth (px into chart)
-    notchSm:  4,                    // minor (unlabelled) tick notch depth
-    vExt:     36,                   // v-line extension below last chart
-    chartW:   630,                  // chart width
-    chartH:   136,                  // chart height
-    chartGap: 52,                   // vertical gap between charts
-    labelFs:  25,                   // label font size
-  };
-
-  // ---------------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------------
-  const px = n => Math.round(n) + 0.5;
-
-  function fmtDecimal(v) {
-    const r   = Math.round(v * 10) / 10;
-    const neg = r < 0;
-    const abs = Math.abs(r);
-    const int = Math.floor(abs);
-    const dec = Math.round((abs - int) * 10);
-    return { int: `${neg ? '-' : ''}${int}`, dec: dec > 0 ? `.${dec}` : '' };
-  }
-
-  function fmtFrac(v) {
-    const r     = Math.round(v * 4) / 4;
-    const neg   = r < 0;
-    const abs   = Math.abs(r);
-    const int   = Math.floor(abs);
-    const frac  = abs - int;
-    const glyph = { 0.25: '¼', 0.5: '½', 0.75: '¾' }[frac] ?? '';
-    const sign  = neg ? '-' : '';
-    if (glyph && int > 0) return `${sign}${int} ${glyph}`;
-    if (glyph)            return `${sign}${glyph}`;
-    return `${sign}${int}`;
-  }
-
-  function sliceDay(arr) { return arr.slice(7, 23); }
-
-  function styleLine(el) {
-    return el
-      .attr('stroke-width', GRID_SW)
-      .attr('stroke-dasharray', '8,6')
-      .attr('shape-rendering', 'crispEdges');
-  }
-  function blendLine(el) {
-    return styleLine(el).attr('stroke', 'white').style('mix-blend-mode', 'difference');
-  }
-  function blendTick(el) {
-    return el
-      .attr('stroke', 'white').attr('stroke-width', GRID_SW)
-      .attr('shape-rendering', 'crispEdges').style('mix-blend-mode', 'difference');
-  }
-
-  // ---------------------------------------------------------------------------
-  // Render — clears and redraws the chart SVG from current cfg
-  // ---------------------------------------------------------------------------
-  function render() {
-    const { hExt, labelGap, notch, notchSm, vExt, chartW, chartH, chartGap, labelFs } = cfg;
-    const chartX0 = 0;
-    const chartX1 = Math.round(chartX0 + chartW) + 1; // right edge of the pixel column the right tick occupies
-    const chartsH = 3 * chartH + 2 * chartGap;
-    const svgH    = chartsH + vExt + labelFs + 4;
-
-    d3.select('.charts').selectAll('*').remove();
-    const svg = d3.select('.charts').append('svg')
-      .attr('width', CONTENT_W).attr('height', svgH)
-      .style('display', 'block').style('overflow', 'visible');
-
-    const series = [
-      { data: sliceDay(DATA.hourlyTemp),   unit: 'C',   name: 'Temperature'            },
-      { data: sliceDay(DATA.hourlyWind),   unit: 'mph', name: 'Wind Speed'             },
-      { data: sliceDay(DATA.hourlyPrecip), unit: '%',   name: 'Precip Chance', yMin: 0, yMax: 100 },
-    ];
-
-    // Pre-compute scales for each series (needed across passes)
-    const scales = series.map(({ data, yMin, yMax }, ci) => {
-      const cy = ci * (chartH + chartGap);
-      return {
-        cy,
-        dMin: yMin ?? d3.min(data),
-        dMax: yMax ?? d3.max(data),
-        xScale: d3.scaleLinear().domain([0, data.length - 1]).range([chartX0, chartX0 + chartW]),
-        yScale: d3.scaleLinear().domain([yMin ?? d3.min(data), yMax ?? d3.max(data)]).range([cy + chartH, cy]),
-      };
-    });
-
-    // Pass 1 — fills
-    series.forEach(({ data }, ci) => {
-      const { cy, xScale, yScale } = scales[ci];
-      svg.append('path').datum(data)
-        .attr('fill', 'black').attr('stroke', 'none').attr('shape-rendering', 'crispEdges')
-        .attr('d', d3.area().x((d,i) => xScale(i)).y0(cy + chartH).y1(d => yScale(d)).curve(d3.curveMonotoneX));
-    });
-
-    // Pass 2 — blend-mode v-ticks (before h-lines so h-lines render on top, covering intersections)
-    const timeStep  = chartW / (N_DAY - 1);
-    const labelY    = chartsH + vExt + 4;
-    const majorIdxs = new Set([0, 5, 10, 15]);
-
-    // Minor ticks — every unlabelled hour
-    for (let idx = 0; idx < N_DAY; idx++) {
-      if (majorIdxs.has(idx)) continue;
-      const vx = px(chartX0 + idx * timeStep);
-      series.forEach((_, ci) => {
-        const top = ci * (chartH + chartGap);
-        const bot = top + chartH;
-        blendTick(svg.append('line').attr('x1', vx).attr('y1', top + 1).attr('x2', vx).attr('y2', top + notchSm + 1));
-        blendTick(svg.append('line').attr('x1', vx).attr('y1', bot - notchSm).attr('x2', vx).attr('y2', bot));
-      });
+  <meta charset="utf-8">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
     }
 
-    [[0,'7'],[5,'12'],[10,'17'],[15,'22']].forEach(([idx, label], li, all) => {
-      const vx      = px(chartX0 + idx * timeStep);
-      const isOuter = li === 0 || li === all.length - 1;
-      const tick    = el => isOuter
-        ? el.attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges')
-        : blendTick(el);
-      series.forEach((_, ci) => {
-        const top    = ci * (chartH + chartGap);
-        const bot    = top + chartH;
-        const topExt = isOuter ? 0 : notch;
-        const botExt = ci === series.length - 1 ? vExt : (isOuter ? 0 : notch);
-        tick(svg.append('line').attr('x1', vx).attr('y1', top - topExt + 1).attr('x2', vx).attr('y2', top + notch + 1));
-        tick(svg.append('line').attr('x1', vx).attr('y1', bot - notch).attr('x2', vx).attr('y2', bot + botExt));
-      });
-      svg.append('text').attr('x', vx).attr('y', labelY)
-        .attr('text-anchor', 'middle').attr('dominant-baseline', 'hanging')
-        .attr('font-size', labelFs).attr('font-family', FONT).text(label);
-    });
+    body {
+      position: relative;
+      width: 1872px;
+      height: 1404px;
+      background: white;
+      color: black;
+      font-family: 'Inter', system-ui, sans-serif;
+      overflow: hidden;
+    }
 
-    // Pass 3 — h-lines, labels, chart name (on top of blend-mode ticks, covering intersection artifacts)
-    series.forEach(({ unit, name }, ci) => {
-      const { cy, dMin, dMax } = scales[ci];
+    .page {
+      position: relative;
+      width: 1872px;
+      height: 1404px;
+      /* margins: 0.4in × 0.45in at 227ppi = 91px × 102px */
+      padding: 91px 102px;
+    }
 
-      [0, 0.5, 1].forEach(frac => {
-        const y = px(cy + chartH * frac);
-        if (frac === 0.5) {
-          blendLine(svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX1).attr('y2', y));
-        } else if (frac === 0) {
-          svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX1).attr('y2', y)
-            .attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges');
-        } else {
-          styleLine(svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX0).attr('y2', y)).attr('stroke', 'black');
-          svg.append('line').attr('x1', chartX0).attr('y1', y).attr('x2', chartX1).attr('y2', y)
-            .attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges');
+    /* Debug: dotted rectangle showing the content margin boundary */
+    .page::before {
+      content: '';
+      display: none;
+      position: absolute;
+      top: 91px;
+      left: 102px;
+      width: 1668px;
+      height: 1222px;
+      border: 2px dotted black;
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    body.debug .page::before {
+      display: block;
+    }
+
+    /* Debug: dashed line through the horizontal center of the page */
+    .page::after {
+      content: '';
+      display: none;
+      position: absolute;
+      top: 0;
+      left: 935px;
+      width: 2px;
+      height: 1404px;
+      border-left: 2px dashed black;
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    body.debug .page::after {
+      display: block;
+    }
+
+    /* Debug: two dashed lines marking a center gutter as wide as the page
+   margin (102px), i.e. ±51px from the center line — for a two-column layout */
+    body::before,
+    body::after {
+      content: '';
+      display: none;
+      position: absolute;
+      top: 0;
+      width: 2px;
+      height: 1404px;
+      border-left: 2px dashed black;
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    body::before {
+      left: 884px;
+    }
+
+    /* center 936 − 51 */
+    body::after {
+      left: 986px;
+    }
+
+    /* center 936 + 51 */
+    body.debug::before,
+    body.debug::after {
+      display: block;
+    }
+
+    /* 51pt at 227ppi */
+    .temp {
+      font-family: 'Inter', system-ui, sans-serif;
+      font-size: 160px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+      letter-spacing: -3px;
+    }
+
+    .conditions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 783px;
+      /* left column: (1668 content − 102 gutter) / 2 */
+      margin-bottom: 44px;
+    }
+
+    /* condition + details block, pushed to the right edge of the left column */
+    .summary {
+      text-align: right;
+    }
+
+    /* 17pt */
+    .condition {
+      font-size: 54px;
+      margin-bottom: 13px;
+    }
+
+    /* 11pt */
+    .details {
+      font-size: 36px;
+      color: #606060;
+    }
+
+    /* Photo slot at the bottom of the left column. The image is fetched from the
+       server, cover-cropped and dithered on a <canvas> in JS (see DITHER below). */
+    .photo {
+      position: absolute;
+      left: 102px;
+      /* left column left edge */
+      bottom: 91px;
+      /* content bottom margin */
+      width: 783px;
+      /* left column width */
+      height: 380px;
+      /* free space below the charts is ~404px */
+    }
+
+    /* Canvas backing store == on-screen pixels; the dither is computed at this
+       resolution (1:1) and cover-cropped in JS, so no object-fit scaling here. */
+    .photo canvas {
+      display: block;
+      width: 783px;
+      height: 380px;
+      border-radius: 32px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="page">
+
+    <div class="conditions">
+      <div class="temp"><span id="w-temp">—</span>°C</div>
+      <div class="summary">
+        <div class="condition" id="w-condition" style="display:none"></div>
+        <div class="details"><span id="w-low">—</span>&deg; to <span id="w-high">—</span>&deg;, <span
+            id="w-wind">—</span> mph wind</div>
+      </div>
+    </div>
+
+    <div class="charts"></div>
+
+    <div class="photo">
+      <canvas id="photo-canvas"></canvas>
+    </div>
+
+  </div>
+
+  <!-- D3 — loaded from CDN (works both in headless Chrome render and direct browser preview) -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+
+  <!-- Chart data: Go injects JSON here; falls back to fake data when opened directly -->
+  <script type="application/json" id="chart-data">{{.DataJSON}}</script>
+
+  <!-- Photo URLs: Go injects the list; page picks one at random per render -->
+  <script type="application/json" id="photos-data">{{.PhotosJSON}}</script>
+
+  <!-- Chart rendering — pure presentation, no data fetching -->
+  <script>
+    (function () {
+      const DATA = (() => {
+        try {return JSON.parse(document.getElementById('chart-data').textContent);} catch (e) { }
+        return {
+          temp: 11.4, tempMin: 7.8, tempMax: 14.6, windMPH: 17.3, condition: 'Partly cloudy', debug: true,
+          hourlyTemp: [7.2, 7.8, 6.9, 7.1, 7.4, 8.3, 9.1, 10.4, 11.2, 12.7, 13.1, 14.3, 14.6, 14.8, 13.9, 12.4, 11.8, 10.9, 9.7, 9.2, 8.6, 8.1, 7.8, 7.5],
+          hourlyWind: [14.2, 13.8, 12.9, 13.7, 15.1, 16.4, 17.8, 19.5, 21.3, 22.7, 21.9, 19.6, 17.3, 16.8, 15.4, 16.2, 17.9, 18.6, 17.4, 15.8, 14.5, 13.7, 12.9, 12.1],
+          hourlyPrecip: [0, 0, 0, 0, 0, 0, 0, 5, 12, 22, 31, 43, 52, 46, 33, 21, 14, 9, 4, 0, 0, 0, 0, 0],
+        };
+      })();
+
+      // ---------------------------------------------------------------------------
+      // Fixed constants
+      // ---------------------------------------------------------------------------
+      const CONTENT_W = 1872 - 2 * 102;
+      const GUTTER = 102;                       // column gap = left/right page margin
+      const COL_W = (CONTENT_W - GUTTER) / 2;  // width of each of the two columns (783)
+      const N_DAY = 16;
+      const GRID_SW = 1;
+      const FONT = "'Inter', system-ui, sans-serif";
+
+      // ---------------------------------------------------------------------------
+      // Tunable config — driven by sliders in browser preview, fixed at render time
+      // ---------------------------------------------------------------------------
+      const cfg = {
+        hExt: 0,                    // h-line left overhang past chart edge
+        labelGap: 14,                   // gap between chart edge and y-axis label
+        notch: 9,                    // v-line notch depth (px into chart)
+        notchSm: 4,                    // minor (unlabelled) tick notch depth
+        vExt: 36,                   // v-line extension below last chart
+        chartH: 136,                  // chart height
+        chartGap: 52,                   // vertical gap between charts
+        labelFs: 25,                   // label font size
+      };
+
+      // ---------------------------------------------------------------------------
+      // Helpers
+      // ---------------------------------------------------------------------------
+      const px = n => Math.round(n) + 0.5;
+
+      function fmtDecimal(v) {
+        const r = Math.round(v * 10) / 10;
+        const neg = r < 0;
+        const abs = Math.abs(r);
+        const int = Math.floor(abs);
+        const dec = Math.round((abs - int) * 10);
+        return {int: `${neg ? '-' : ''}${int}`, dec: dec > 0 ? `.${dec}` : ''};
+      }
+
+      function fmtFrac(v) {
+        const r = Math.round(v * 4) / 4;
+        const neg = r < 0;
+        const abs = Math.abs(r);
+        const int = Math.floor(abs);
+        const frac = abs - int;
+        const glyph = {0.25: '¼', 0.5: '½', 0.75: '¾'}[frac] ?? '';
+        const sign = neg ? '-' : '';
+        if (glyph && int > 0) return `${sign}${int} ${glyph}`;
+        if (glyph) return `${sign}${glyph}`;
+        return `${sign}${int}`;
+      }
+
+      function sliceDay(arr) {return arr.slice(7, 23);}
+
+      function styleLine(el) {
+        return el
+          .attr('stroke-width', GRID_SW)
+          .attr('stroke-dasharray', '8,6')
+          .attr('shape-rendering', 'crispEdges');
+      }
+      function blendLine(el) {
+        return styleLine(el).attr('stroke', 'white').style('mix-blend-mode', 'difference');
+      }
+      function blendTick(el) {
+        return el
+          .attr('stroke', 'white').attr('stroke-width', GRID_SW)
+          .attr('shape-rendering', 'crispEdges').style('mix-blend-mode', 'difference');
+      }
+
+      // ---------------------------------------------------------------------------
+      // Render — clears and redraws the chart SVG from current cfg
+      // ---------------------------------------------------------------------------
+      function render() {
+        const {hExt, labelGap, notch, notchSm, vExt, chartH, chartGap, labelFs} = cfg;
+        const chartX0 = 0;                       // flush to the left edge of the column
+        const chartsH = 3 * chartH + 2 * chartGap;
+        const svgH = chartsH + vExt + labelFs + 4;
+
+        d3.select('.charts').selectAll('*').remove();
+        const svg = d3.select('.charts').append('svg')
+          .attr('width', CONTENT_W).attr('height', svgH)
+          .style('display', 'block').style('overflow', 'visible');
+
+        const series = [
+          {data: sliceDay(DATA.hourlyTemp), unit: 'C', name: 'Temperature'},
+          {data: sliceDay(DATA.hourlyWind), unit: 'mph', name: 'Wind Speed'},
+          {data: sliceDay(DATA.hourlyPrecip), unit: '%', name: 'Precip Chance', yMin: 0, yMax: 100},
+        ];
+
+        // Data ranges — independent of chart width, but needed to size the value labels.
+        const bounds = series.map(({data, yMin, yMax}) => ({
+          dMin: yMin ?? d3.min(data),
+          dMax: yMax ?? d3.max(data),
+        }));
+
+        // Flush layout: the plot starts at the column's left edge (chartX0 = 0) and the
+        // widest value label's right edge lands on the column's right edge (COL_W). The
+        // labels are variable width, so measure them and let chartW adapt to fit.
+        const unitFs = Math.round(labelFs * 0.85);
+        const measure = svg.append('text').attr('x', 0).attr('y', 0).attr('font-family', FONT);
+        const labelExtent = (val, unit) => {
+          measure.selectAll('*').remove();
+          measure.append('tspan').attr('font-size', labelFs).text(Math.round(val));
+          measure.append('tspan').attr('font-size', unitFs).attr('dx', 2).text(unit);
+          const b = measure.node().getBBox();
+          return b.x + b.width;                  // rightmost inked x, relative to the anchor
+        };
+        const maxLabelW = Math.max(...series.flatMap(({unit}, ci) => {
+          const {dMin, dMax} = bounds[ci];
+          return [dMax, (dMin + dMax) / 2, dMin].map(v => labelExtent(v, unit));
+        }));
+        measure.remove();
+
+        const chartW = COL_W - labelGap - maxLabelW;
+        const chartX1 = Math.round(chartX0 + chartW) + 1; // right edge of the pixel column the right tick occupies
+
+        // Pre-compute scales for each series (needed across passes)
+        const scales = series.map(({data, yMin, yMax}, ci) => {
+          const cy = ci * (chartH + chartGap);
+          const {dMin, dMax} = bounds[ci];
+          return {
+            cy, dMin, dMax,
+            xScale: d3.scaleLinear().domain([0, data.length - 1]).range([chartX0, chartX0 + chartW]),
+            yScale: d3.scaleLinear().domain([dMin, dMax]).range([cy + chartH, cy]),
+          };
+        });
+
+        // Pass 1 — fills
+        series.forEach(({data}, ci) => {
+          const {cy, xScale, yScale} = scales[ci];
+          svg.append('path').datum(data)
+            .attr('fill', 'black').attr('stroke', 'none').attr('shape-rendering', 'crispEdges')
+            .attr('d', d3.area().x((d, i) => xScale(i)).y0(cy + chartH).y1(d => yScale(d)).curve(d3.curveMonotoneX));
+        });
+
+        // Pass 2 — blend-mode v-ticks (before h-lines so h-lines render on top, covering intersections)
+        const timeStep = chartW / (N_DAY - 1);
+        const labelY = chartsH + vExt + 4;
+        const majorIdxs = new Set([0, 5, 10, 15]);
+
+        // Minor ticks — every unlabelled hour
+        for (let idx = 0; idx < N_DAY; idx++) {
+          if (majorIdxs.has(idx)) continue;
+          const vx = px(chartX0 + idx * timeStep);
+          series.forEach((_, ci) => {
+            const top = ci * (chartH + chartGap);
+            const bot = top + chartH;
+            blendTick(svg.append('line').attr('x1', vx).attr('y1', top + 1).attr('x2', vx).attr('y2', top + notchSm + 1));
+            blendTick(svg.append('line').attr('x1', vx).attr('y1', bot - notchSm).attr('x2', vx).attr('y2', bot));
+          });
         }
-      });
 
-      const lx   = chartX0 + chartW + labelGap;
-      const capH = labelFs * 0.72;
-      const unitFs = Math.round(labelFs * 0.85);
-      [
-        { val: dMax,              y: cy + capH                   },
-        { val: (dMin + dMax) / 2, y: cy + chartH / 2 + capH / 2 },
-        { val: dMin,              y: cy + chartH                  },
-      ].forEach(({ val, y }) => {
-        const t = svg.append('text').attr('x', lx).attr('y', y)
-          .attr('text-anchor', 'start').attr('dominant-baseline', 'auto')
-          .attr('font-family', FONT);
-        t.append('tspan').attr('font-size', labelFs).text(Math.round(val));
-        t.append('tspan').attr('font-size', unitFs).attr('dx', 2).text(unit);
-      });
+        [[0, '7'], [5, '12'], [10, '17'], [15, '22']].forEach(([idx, label], li, all) => {
+          const vx = px(chartX0 + idx * timeStep);
+          const isOuter = li === 0 || li === all.length - 1;
+          const tick = el => isOuter
+            ? el.attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges')
+            : blendTick(el);
+          series.forEach((_, ci) => {
+            const top = ci * (chartH + chartGap);
+            const bot = top + chartH;
+            const topExt = isOuter ? 0 : notch;
+            const botExt = ci === series.length - 1 ? vExt : (isOuter ? 0 : notch);
+            tick(svg.append('line').attr('x1', vx).attr('y1', top - topExt + 1).attr('x2', vx).attr('y2', top + notch + 1));
+            tick(svg.append('line').attr('x1', vx).attr('y1', bot - notch).attr('x2', vx).attr('y2', bot + botExt));
+          });
+          svg.append('text').attr('x', vx).attr('y', labelY)
+            .attr('text-anchor', 'middle').attr('dominant-baseline', 'hanging')
+            .attr('font-size', labelFs).attr('font-family', FONT).text(label);
+        });
 
-      svg.append('text')
-        .attr('x', chartX0).attr('y', cy - labelFs * 0.4)
-        .attr('dominant-baseline', 'auto')
-        .attr('font-size', labelFs * 0.8).attr('font-family', FONT)
-        .attr('fill', 'black')
-        .text(name);
-    });
-  }
+        // Pass 3 — h-lines, labels, chart name (on top of blend-mode ticks, covering intersection artifacts)
+        series.forEach(({unit, name}, ci) => {
+          const {cy, dMin, dMax} = scales[ci];
 
-  // ---------------------------------------------------------------------------
-  // Header population
-  // ---------------------------------------------------------------------------
-  document.getElementById('w-temp').textContent = DATA.temp  != null ? Math.round(DATA.temp)   : '—';
-  document.getElementById('w-high').textContent = DATA.tempMax != null ? Math.round(DATA.tempMax) : '—';
-  document.getElementById('w-low').textContent  = DATA.tempMin != null ? Math.round(DATA.tempMin) : '—';
-  document.getElementById('w-wind').textContent = DATA.windMPH != null ? Math.round(DATA.windMPH) : '—';
-  if (DATA.condition) {
-    const el = document.getElementById('w-condition');
-    el.textContent = DATA.condition;
-    el.style.display = '';
-  }
-  if (DATA.debug) document.body.classList.add('debug');
+          [0, 0.5, 1].forEach(frac => {
+            const y = px(cy + chartH * frac);
+            if (frac === 0.5) {
+              blendLine(svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX1).attr('y2', y));
+            } else if (frac === 0) {
+              svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX1).attr('y2', y)
+                .attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges');
+            } else {
+              styleLine(svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX0).attr('y2', y)).attr('stroke', 'black');
+              svg.append('line').attr('x1', chartX0).attr('y1', y).attr('x2', chartX1).attr('y2', y)
+                .attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges');
+            }
+          });
 
-  render();
+          const lx = chartX0 + chartW + labelGap;
+          const capH = labelFs * 0.72;
+          [
+            {val: dMax, y: cy + capH},
+            {val: (dMin + dMax) / 2, y: cy + chartH / 2 + capH / 2},
+            {val: dMin, y: cy + chartH},
+          ].forEach(({val, y}) => {
+            const t = svg.append('text').attr('x', lx).attr('y', y)
+              .attr('text-anchor', 'start').attr('dominant-baseline', 'auto')
+              .attr('font-family', FONT);
+            t.append('tspan').attr('font-size', labelFs).text(Math.round(val));
+            t.append('tspan').attr('font-size', unitFs).attr('dx', 2).text(unit);
+          });
 
-  // ---------------------------------------------------------------------------
-  // Controls panel — browser preview only (hidden in headless Chrome render)
-  // ---------------------------------------------------------------------------
-  if (!DATA.headless) {
-    // Scale page to fit viewport so it looks approximately the right physical size
-    document.body.style.zoom = Math.min(window.innerWidth / 1872, window.innerHeight / 1404).toFixed(3);
+          svg.append('text')
+            .attr('x', chartX0).attr('y', cy - labelFs * 0.4)
+            .attr('dominant-baseline', 'auto')
+            .attr('font-size', labelFs * 0.8).attr('font-family', FONT)
+            .attr('fill', 'black')
+            .text(name);
+        });
+      }
 
-    // Show device bounds: gray backdrop + shadow on the page element
-    document.documentElement.style.background = '#b0b0b0';
-    document.querySelector('.page').style.boxShadow = '0 4px 24px rgba(0,0,0,0.35)';
+      // ---------------------------------------------------------------------------
+      // Header population
+      // ---------------------------------------------------------------------------
+      document.getElementById('w-temp').textContent = DATA.temp != null ? Math.round(DATA.temp) : '—';
+      document.getElementById('w-high').textContent = DATA.tempMax != null ? Math.round(DATA.tempMax) : '—';
+      document.getElementById('w-low').textContent = DATA.tempMin != null ? Math.round(DATA.tempMin) : '—';
+      document.getElementById('w-wind').textContent = DATA.windMPH != null ? Math.round(DATA.windMPH) : '—';
+      if (DATA.condition) {
+        const el = document.getElementById('w-condition');
+        el.textContent = DATA.condition;
+        el.style.display = '';
+      }
+      if (DATA.debug) document.body.classList.add('debug');
 
-    const SLIDERS = [
-      { key: 'chartW',   label: 'Chart width',         min: 200,  max: 1400, step: 10  },
-      { key: 'chartH',   label: 'Chart height',        min: 30,   max: 200,  step: 2   },
-      { key: 'chartGap', label: 'Gap between charts',  min: 0,    max: 150,  step: 2   },
-      { key: 'hExt',     label: 'H-line overhang',     min: 0,    max: 100,  step: 1   },
-      { key: 'labelGap', label: 'Label ↔ h-line gap',  min: 0,    max: 30,   step: 1   },
-      { key: 'notch',    label: 'Notch depth',         min: 0,    max: 80,   step: 1   },
-      { key: 'notchSm',  label: 'Minor notch depth',   min: 0,    max: 40,   step: 1   },
-      { key: 'vExt',     label: 'V-line overhang',     min: 0,    max: 100,  step: 1   },
-      { key: 'labelFs',  label: 'Font size',           min: 8,    max: 60,   step: 1   },
-    ];
+      render();
 
-    const panel = Object.assign(document.createElement('div'), { id: 'cfg-panel' });
-    Object.assign(panel.style, {
-      position: 'fixed', top: '12px', right: '12px', zIndex: '9999',
-      background: 'rgba(255,255,255,0.92)', border: '1px solid #ccc',
-      borderRadius: '8px', padding: '12px 16px', fontFamily: 'monospace',
-      fontSize: '11px', lineHeight: '1.6', minWidth: '220px',
-      boxShadow: '0 2px 12px rgba(0,0,0,0.15)', backdropFilter: 'blur(4px)',
-    });
+      // ---------------------------------------------------------------------------
+      // Photo — pick one of the server's images at random and dither it (1-bit
+      // Atkinson) on a <canvas> at the device's pixel resolution into the bottom-
+      // left slot. The headless renderer waits on window.__renderDone before capture.
+      // ---------------------------------------------------------------------------
+      window.__renderDone = false;
+      const renderDone = () => { window.__renderDone = true; };
+      setTimeout(renderDone, 4000);   // backstop: never block the screenshot forever
 
-    SLIDERS.forEach(({ key, label, min, max, step }) => {
-      const row   = document.createElement('div');
-      const lbl   = Object.assign(document.createElement('label'), { textContent: label });
-      const val   = Object.assign(document.createElement('span'), { textContent: cfg[key] });
-      Object.assign(val.style, { float: 'right', color: '#555', minWidth: '32px', textAlign: 'right' });
-      const input = Object.assign(document.createElement('input'), {
-        type: 'range', min, max, step, value: cfg[key],
-      });
-      Object.assign(input.style, { width: '100%', margin: '2px 0 6px', display: 'block' });
-      input.addEventListener('input', () => {
-        cfg[key] = Number(input.value);
-        val.textContent = cfg[key];
-        render();
-      });
-      lbl.appendChild(val);
-      row.appendChild(lbl);
-      row.appendChild(input);
-      panel.appendChild(row);
-    });
+      // Dither knobs — edits hot-reload on the next render.
+      const DITHER = {
+        levels: 2,      // output grays for the keeper: 2 = pure B/W … 16 = panel max (4-bit)
+        gamut: false,   // remap output into the panel's sRGB range [40, 215]
+      };
 
-    document.body.appendChild(panel);
-  }
+      const PHOTOS = (() => {
+        try { return JSON.parse(document.getElementById('photos-data').textContent) || []; }
+        catch (e) { return []; }
+      })();
 
-})();
-</script>
+      // Quantise a value to the nearest of `levels` evenly-spaced grays.
+      const snap = (v, step) => Math.max(0, Math.min(255, Math.round(v / step) * step));
+
+      // Atkinson error diffusion: spread 1/8 of the error to each of 6 neighbours
+      // (only 6/8 propagates → crisp, high-contrast 1-bit; deliberately B/W since
+      // the panel's pure black/white are its most reliable, highest-contrast states).
+      function ditherAtkinson(g, w, h, step) {
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+          const i = y * w + x, e = (g[i] - (g[i] = snap(g[i], step))) / 8;
+          if (x + 1 < w) g[i + 1] += e;
+          if (x + 2 < w) g[i + 2] += e;
+          if (y + 1 < h) {
+            if (x > 0) g[i + w - 1] += e;
+            g[i + w] += e;
+            if (x + 1 < w) g[i + w + 1] += e;
+          }
+          if (y + 2 < h) g[i + 2 * w] += e;
+        }
+      }
+
+      // Cover-crop `img` into `canvas`, Atkinson-dither it, and paint it back.
+      // Canvas pixel size is read from its CSS box, so dithering is 1:1 with output.
+      function paintDither(canvas, img) {
+        const w = canvas.clientWidth, h = canvas.clientHeight;
+        if (!w || !h) return;
+        canvas.width = w; canvas.height = h;
+        const cover = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+        const dw = img.naturalWidth * cover, dh = img.naturalHeight * cover;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);   // cover-crop, centred
+
+        const imgData = ctx.getImageData(0, 0, w, h), d = imgData.data;
+        const g = new Float32Array(w * h);   // luminance; float so error can over/underflow
+        for (let i = 0; i < w * h; i++) {
+          g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+        }
+
+        ditherAtkinson(g, w, h, 255 / (DITHER.levels - 1));
+
+        const lo = 40, hi = 215;
+        for (let i = 0; i < w * h; i++) {
+          const v = Math.round(DITHER.gamut ? lo + (g[i] / 255) * (hi - lo) : g[i]);
+          d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
+          d[i * 4 + 3] = 255;
+        }
+        ctx.putImageData(imgData, 0, 0);
+      }
+
+      if (PHOTOS.length) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';     // CORS-clean so getImageData isn't tainted
+        img.onload = () => {
+          try { paintDither(document.getElementById('photo-canvas'), img); }
+          catch (e) { console.error('dither failed', e); }
+          requestAnimationFrame(renderDone);   // ensure the canvas paints before capture
+        };
+        img.onerror = () => { console.error('photo load failed', img.src); renderDone(); };
+        img.src = PHOTOS[Math.floor(Math.random() * PHOTOS.length)];
+      } else {
+        renderDone();
+      }
+
+      // ---------------------------------------------------------------------------
+      // Controls panel — browser preview only (hidden in headless Chrome render)
+      // ---------------------------------------------------------------------------
+      if (!DATA.headless) {
+        // Scale page to fit viewport so it looks approximately the right physical size
+        document.body.style.zoom = Math.min(window.innerWidth / 1872, window.innerHeight / 1404).toFixed(3);
+
+        // Show device bounds: gray backdrop + shadow on the page element
+        document.documentElement.style.background = '#b0b0b0';
+        document.querySelector('.page').style.boxShadow = '0 4px 24px rgba(0,0,0,0.35)';
+
+        const SLIDERS = [
+          {key: 'chartH', label: 'Chart height', min: 30, max: 200, step: 2},
+          {key: 'chartGap', label: 'Gap between charts', min: 0, max: 150, step: 2},
+          {key: 'hExt', label: 'H-line overhang', min: 0, max: 100, step: 1},
+          {key: 'labelGap', label: 'Label ↔ h-line gap', min: 0, max: 30, step: 1},
+          {key: 'notch', label: 'Notch depth', min: 0, max: 80, step: 1},
+          {key: 'notchSm', label: 'Minor notch depth', min: 0, max: 40, step: 1},
+          {key: 'vExt', label: 'V-line overhang', min: 0, max: 100, step: 1},
+          {key: 'labelFs', label: 'Font size', min: 8, max: 60, step: 1},
+        ];
+
+        const panel = Object.assign(document.createElement('div'), {id: 'cfg-panel'});
+        Object.assign(panel.style, {
+          position: 'fixed', top: '12px', right: '12px', zIndex: '9999',
+          background: 'rgba(255,255,255,0.92)', border: '1px solid #ccc',
+          borderRadius: '8px', padding: '12px 16px', fontFamily: 'monospace',
+          fontSize: '11px', lineHeight: '1.6', minWidth: '220px',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.15)', backdropFilter: 'blur(4px)',
+        });
+
+        SLIDERS.forEach(({key, label, min, max, step}) => {
+          const row = document.createElement('div');
+          const lbl = Object.assign(document.createElement('label'), {textContent: label});
+          const val = Object.assign(document.createElement('span'), {textContent: cfg[key]});
+          Object.assign(val.style, {float: 'right', color: '#555', minWidth: '32px', textAlign: 'right'});
+          const input = Object.assign(document.createElement('input'), {
+            type: 'range', min, max, step, value: cfg[key],
+          });
+          Object.assign(input.style, {width: '100%', margin: '2px 0 6px', display: 'block'});
+          input.addEventListener('input', () => {
+            cfg[key] = Number(input.value);
+            val.textContent = cfg[key];
+            render();
+          });
+          lbl.appendChild(val);
+          row.appendChild(lbl);
+          row.appendChild(input);
+          panel.appendChild(row);
+        });
+
+        document.body.appendChild(panel);
+      }
+
+    })();
+  </script>
 
 </body>
+
 </html>
