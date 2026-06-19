@@ -250,7 +250,7 @@
   <!-- Chart data: Go injects JSON here; falls back to fake data when opened directly -->
   <script type="application/json" id="chart-data">{{.DataJSON}}</script>
 
-  <!-- Photo URLs: Go injects the list; page picks one at random per render -->
+  <!-- Photo: Go injects the server-selected image (per --photo-strategy) -->
   <script type="application/json" id="photos-data">{{.PhotosJSON}}</script>
 
   <!-- Chart rendering — pure presentation, no data fetching -->
@@ -634,7 +634,7 @@
           requestAnimationFrame(renderDone);   // ensure the canvas paints before capture
         };
         img.onerror = () => {console.error('photo load failed', img.src); renderDone();};
-        img.src = PHOTOS[Math.floor(Math.random() * PHOTOS.length)];
+        img.src = PHOTOS[0];   // the server chooses which photo (per --photo-strategy)
       } else {
         renderDone();
       }

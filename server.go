@@ -279,8 +279,7 @@ var photoExts = map[string]bool{
 }
 
 // listPhotoURLs returns absolute loopback URLs for every image in photosDir,
-// sorted for stable ordering. The page picks one at random per render, so each
-// /api/display fetch re-rolls (a fresh template parse + page load every time).
+// sorted by filename. Which one is shown is decided by advancePhoto.
 func listPhotoURLs() []string {
 	if photosDir == "" {
 		return nil
@@ -306,8 +305,60 @@ func listPhotoURLs() []string {
 	return urls
 }
 
-func photosJSON() template.JS {
-	b, _ := json.Marshal(listPhotoURLs())
+// Photo selection state. The chosen photo advances only on /api/display, so
+// every background pre-render between two device polls uses the same image —
+// the selection stays put until the device actually fetches again.
+var (
+	photoMu        sync.Mutex
+	photoStrategy  string   // "random" | "shuffle" | "alphabetical" (set at startup)
+	photoSelection string   // currently-chosen photo URL
+	photoOrder     []string // shuffle: the shuffled order being walked
+	photoOrderSig  string   // file-set signature photoOrder was built from
+	photoIdx       int      // position within photoOrder / the alphabetical cycle
+)
+
+// advancePhoto moves the selection to the next photo per the configured strategy.
+// Call once per /api/display so the image changes only when the device fetches.
+func advancePhoto() {
+	urls := listPhotoURLs()
+	photoMu.Lock()
+	defer photoMu.Unlock()
+	if len(urls) == 0 {
+		photoSelection = ""
+		return
+	}
+	switch photoStrategy {
+	case "alphabetical":
+		photoSelection = urls[photoIdx%len(urls)] // listPhotoURLs is sorted by name
+		photoIdx++
+	case "shuffle":
+		sig := strings.Join(urls, "\x00")
+		if photoIdx >= len(photoOrder) || sig != photoOrderSig {
+			photoOrder = append([]string(nil), urls...)
+			rand.Shuffle(len(photoOrder), func(i, j int) {
+				photoOrder[i], photoOrder[j] = photoOrder[j], photoOrder[i]
+			})
+			photoOrderSig = sig
+			photoIdx = 0
+		}
+		photoSelection = photoOrder[photoIdx]
+		photoIdx++
+	default: // random
+		photoSelection = urls[rand.Intn(len(urls))]
+	}
+}
+
+// currentPhotoJSON injects the currently-selected photo as a 0- or 1-element
+// list (matching the page's expectation), without advancing the selection.
+func currentPhotoJSON() template.JS {
+	photoMu.Lock()
+	sel := photoSelection
+	photoMu.Unlock()
+	var arr []string
+	if sel != "" {
+		arr = []string{sel}
+	}
+	b, _ := json.Marshal(arr)
 	return template.JS(b)
 }
 
@@ -553,7 +604,7 @@ func currentDashboardData(lat, lon float64, location string) dashboardData {
 			data = buildDashboard(wd)
 		}
 	}
-	data.PhotosJSON = photosJSON() // independent of weather
+	data.PhotosJSON = currentPhotoJSON() // server-selected photo, independent of weather
 	_ = location                   // retained for future footer use
 	return data
 }
@@ -609,6 +660,8 @@ func handleDisplay(w http.ResponseWriter, r *http.Request, refreshRate int, tmpl
 		)
 	}
 
+	advancePhoto() // choose the photo for this serve (and the pre-renders until the next)
+
 	// In dev/preview the render is driven on demand (the fswatch loop curls this
 	// endpoint after each edit), so render synchronously here. In production the
 	// background loop keeps dashboard.png fresh, so the device never waits on a
@@ -657,6 +710,7 @@ func main() {
 	dp          := flag.String("devices", "devices.json", "Device registry file")
 	photos      := flag.String("photos", "photos", "Directory of images to cycle through")
 	renderEvery := flag.Int("render-interval", 300, "Seconds between background re-renders (production)")
+	photoStrat  := flag.String("photo-strategy", "shuffle", "Photo cycling: random | shuffle | alphabetical")
 	lat         := flag.Float64("lat", envFloat("TRMNL_LAT"), "Weather latitude (or set TRMNL_LAT)")
 	lon         := flag.Float64("lon", envFloat("TRMNL_LON"), "Weather longitude (or set TRMNL_LON)")
 	location    := flag.String("location", os.Getenv("TRMNL_LOCATION"), "Location name (or set TRMNL_LOCATION)")
@@ -665,6 +719,13 @@ func main() {
 	devicesPath = *dp
 	photosDir = *photos
 	renderBaseURL = loopbackURL(*addr)
+	photoStrategy = *photoStrat
+	switch photoStrategy {
+	case "random", "shuffle", "alphabetical":
+	default:
+		log.Printf("[photos] unknown strategy %q; using \"shuffle\"", photoStrategy)
+		photoStrategy = "shuffle"
+	}
 	rand.Seed(time.Now().UnixNano()) //nolint:staticcheck
 	loadRegistry(devicesPath)
 
@@ -697,6 +758,7 @@ func main() {
 	log.Printf("  devices file:   %s", devicesPath)
 	log.Printf("  devices loaded: %d", len(byMAC))
 	log.Printf("  photos:         %s (%d found)", photosDir, len(listPhotoURLs()))
+	log.Printf("  photo-strategy: %s", photoStrategy)
 	if !devMode {
 		log.Printf("  render-every:   %ds (pre-rendered; device polls never wait on a render)", *renderEvery)
 	}
@@ -715,7 +777,8 @@ func main() {
 				log.Printf("[render] %v", err)
 			}
 		}
-		renderOnce() // initial render so the very first device poll already has an image
+		advancePhoto() // choose the first photo so the initial render isn't blank
+		renderOnce()   // initial render so the very first device poll already has an image
 		go func() {
 			t := time.NewTicker(time.Duration(*renderEvery) * time.Second)
 			defer t.Stop()

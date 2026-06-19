@@ -46,11 +46,14 @@ $(SERVER): server.go go.mod go.sum
 server: $(SERVER)
 
 # Render PNG and start the BYOS server.
-# Optional: make serve ADDR=:9090 REFRESH_RATE=900
+# Optional (flag = make var, also picked up from .env):
+#   make serve ADDR=:9090 REFRESH_RATE=900 RENDER_INTERVAL=120 PHOTO_STRATEGY=alphabetical
 serve: $(SERVER)
 	./$(SERVER) \
 		$(if $(ADDR),--addr $(ADDR),) \
-		$(if $(REFRESH_RATE),--refresh-rate $(REFRESH_RATE),)
+		$(if $(REFRESH_RATE),--refresh-rate $(REFRESH_RATE),) \
+		$(if $(RENDER_INTERVAL),--render-interval $(RENDER_INTERVAL),) \
+		$(if $(PHOTO_STRATEGY),--photo-strategy $(PHOTO_STRATEGY),)
 
 clean:
 	rm -f $(OUT) $(VIEWER) $(SERVER) $(SERVER_DEV)
