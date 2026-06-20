@@ -19,12 +19,14 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -401,31 +403,60 @@ func findChrome() (string, error) {
 // Chrome starts on first render and is reused for all subsequent renders, avoiding
 // the ~1-2s cold-start penalty on every re-render.
 var (
-	chromeOnce   sync.Once
+	chromeMu     sync.Mutex // guards the chrome context against re-init races and the shutdown handler
 	chromeCtx    context.Context
 	chromeCancel context.CancelFunc
-	chromeErr    error
 )
 
+// initChrome lazily starts headless Chrome and reuses it across renders. If the
+// previous browser died (e.g. it crashed or was OOM-killed, leaving the context
+// canceled), it reaps the dead context and starts a fresh one — so the render
+// loop self-heals on the next tick instead of wedging on "context canceled"
+// until the process is restarted.
 func initChrome() error {
-	chromeOnce.Do(func() {
-		chrome, err := findChrome()
-		if err != nil {
-			chromeErr = err
-			return
-		}
-		opts := append(chromedp.DefaultExecAllocatorOptions[:],
-			chromedp.ExecPath(chrome),
-			chromedp.Flag("hide-scrollbars", true),
-			chromedp.Flag("force-device-scale-factor", "1"),
-			chromedp.WindowSize(1872, 1404),
-		)
-		allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
-		ctx, cancel := chromedp.NewContext(allocCtx)
-		chromeCtx = ctx
-		chromeCancel = func() { cancel(); allocCancel() }
-	})
-	return chromeErr
+	chromeMu.Lock()
+	defer chromeMu.Unlock()
+
+	// Reuse the running browser while its context is still healthy.
+	if chromeCtx != nil && chromeCtx.Err() == nil {
+		return nil
+	}
+	// A non-nil context here is a dead one (Chrome exited); reap its cancel
+	// funcs before replacing them so we don't leak the old process tree.
+	if chromeCancel != nil {
+		log.Printf("[render] headless Chrome context is dead; restarting browser")
+		chromeCancel()
+		chromeCtx, chromeCancel = nil, nil
+	}
+
+	chrome, err := findChrome()
+	if err != nil {
+		return err
+	}
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(chrome),
+		chromedp.Flag("hide-scrollbars", true),
+		chromedp.Flag("force-device-scale-factor", "1"),
+		chromedp.WindowSize(1872, 1404),
+	)
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	chromeCtx = ctx
+	chromeCancel = func() { cancel(); allocCancel() }
+	return nil
+}
+
+// shutdownChrome tears down the headless Chrome child (process + temp profile)
+// that chromedp launched. Without it, every SIGINT/SIGTERM — dev restarts,
+// Ctrl-C — orphans the browser, leaking a process tree each time. No-op if
+// Chrome never started.
+func shutdownChrome() {
+	chromeMu.Lock()
+	cancel := chromeCancel
+	chromeMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // optimizePNG converts the RGB screenshot into a 16-level grayscale PNG — exactly
@@ -788,5 +819,17 @@ func main() {
 		}()
 	}
 
-	select {} // serve + render run in goroutines; block forever
+	// Block until a shutdown signal, then reap the headless Chrome child so it
+	// doesn't leak across restarts. (serve + render run in goroutines.)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-sigCh
+	log.Printf("shutting down (%s); tearing down headless Chrome", sig)
+	done := make(chan struct{})
+	go func() { shutdownChrome(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Printf("chrome teardown timed out; exiting anyway")
+	}
 }
