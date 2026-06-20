@@ -353,7 +353,7 @@
       // Render — clears and redraws the chart SVG from current cfg
       // ---------------------------------------------------------------------------
       function render() {
-        const {labelGap, notch, notchSm, vExt, chartH, chartGap, labelFs} = cfg;
+        const {labelGap, notch, notchSm, notchW, vExt, chartH, chartGap, labelFs} = cfg;
         const chartX0 = 0;                       // flush to the left edge of the column
 
         const series = [
@@ -396,7 +396,7 @@
         measure.remove();
 
         const chartW = COL_W - labelGap - maxLabelW;
-        const chartX1 = Math.round(chartX0 + chartW) + 1; // right edge of the pixel column the right tick occupies
+        const chartX1 = chartX0 + chartW;        // right edge of the plotted area — the fill, h-lines, and inset right notch all land here
 
         // Pre-compute scales for each series (needed across passes)
         const scales = series.map(({data, yMin, yMax}, ci) => {
@@ -435,10 +435,19 @@
         }
 
         [[0, '7'], [5, '12'], [10, '17'], [15, '22']].forEach(([idx, label], li, all) => {
-          const vx = px(chartX0 + idx * timeStep);
-          const isOuter = li === 0 || li === all.length - 1;
+          const labelX = px(chartX0 + idx * timeStep);
+          const isFirst = li === 0, isLast = li === all.length - 1;
+          const isOuter = isFirst || isLast;
+          // Edge notches sit on the chart's left/right boundary. Draw them as an
+          // INSIDE stroke (inset by half the width) so a wider notch grows into
+          // the chart rather than out past the edge — otherwise a full-height
+          // (100%) black chart shows the notch as a bump sticking out the side.
+          // They stay solid black (no blend-mode inversion), unlike inner notches.
+          const vx = isOuter
+            ? (isFirst ? chartX0 + notchW / 2 : chartX1 - notchW / 2)
+            : labelX;
           const tick = el => isOuter
-            ? el.attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges')
+            ? el.attr('stroke', 'black').attr('stroke-width', notchW).attr('shape-rendering', 'crispEdges')
             : blendTick(el);
           series.forEach((_, ci) => {
             const top = ci * (chartH + chartGap);
@@ -448,7 +457,7 @@
             tick(svg.append('line').attr('x1', vx).attr('y1', top - topExt + 1).attr('x2', vx).attr('y2', top + notch + 1));
             tick(svg.append('line').attr('x1', vx).attr('y1', bot - notch).attr('x2', vx).attr('y2', bot + botExt));
           });
-          svg.append('text').attr('x', vx).attr('y', labelY)
+          svg.append('text').attr('x', labelX).attr('y', labelY)
             .attr('text-anchor', 'middle').attr('dominant-baseline', 'hanging')
             .attr('font-size', labelFs).attr('font-family', FONT).text(label);
         });
