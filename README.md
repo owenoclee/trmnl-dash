@@ -123,6 +123,14 @@ Inter is loaded from the Google Fonts CDN at render time, so the container needs
 outbound internet (it already does, for weather) — bundled Noto/Liberation faces
 are the fallback if the CDN is unreachable.
 
+### Deploying to k3s / Kubernetes
+
+Example manifests are in [`k8s/`](k8s/README.md) — Namespace, ConfigMap,
+Deployment, and a `LoadBalancer` Service. Apply them with `kubectl` or vendor
+them into your GitOps repo (Flux / Argo CD). `make deploy` is a convenience for
+the common k3s case of a ClusterIP-only in-cluster registry; see
+[`k8s/README.md`](k8s/README.md) for image delivery, photos, and LAN exposure.
+
 ## Preview tool (`viewer.swift`)
 
 A small AppKit app compiled by `swiftc`. It:

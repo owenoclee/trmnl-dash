@@ -13,7 +13,13 @@ PORT   ?= 8080
 
 SERVER := server
 
-.PHONY: preview open clean server serve
+# k3s image delivery (see k8s/README.md). Set DEPLOY_HOST and REGISTRY_CIP in
+# .env, or override: make deploy DEPLOY_HOST=user@node REGISTRY_CIP=10.x.x.x:5000
+DEPLOY_HOST  ?= user@your-k3s-node
+REGISTRY_CIP ?= REGISTRY-CLUSTERIP:5000
+IMAGE        := registry.local/trmnl:latest
+
+.PHONY: preview open clean server serve deploy
 
 $(VIEWER): viewer.swift
 	swiftc -o $(VIEWER) viewer.swift
@@ -57,3 +63,14 @@ serve: $(SERVER)
 
 clean:
 	rm -f $(OUT) $(VIEWER) $(SERVER) $(SERVER_DEV)
+
+# Build the arm64 image and ship it into the cluster's registry, then roll the
+# Flux-managed deployment. The registry is ClusterIP-only, so the push goes via
+# the node: import into its containerd, then push to the registry it can reach.
+deploy:
+	docker build -t $(IMAGE) .
+	docker save $(IMAGE) | gzip | ssh $(DEPLOY_HOST) 'gunzip | sudo k3s ctr -n k8s.io images import -'
+	ssh $(DEPLOY_HOST) 'sudo k3s ctr -n k8s.io images tag --force $(IMAGE) $(REGISTRY_CIP)/trmnl:latest \
+		&& sudo k3s ctr -n k8s.io images push --plain-http $(REGISTRY_CIP)/trmnl:latest'
+	ssh $(DEPLOY_HOST) 'sudo k3s kubectl -n trmnl rollout restart deploy/trmnl \
+		&& sudo k3s kubectl -n trmnl rollout status deploy/trmnl'

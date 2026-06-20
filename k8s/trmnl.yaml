@@ -1,0 +1,112 @@
+# Example manifests for deploying the BYOS server to a k3s / Kubernetes cluster.
+# Adjust the image ref, settings, and exposure for your cluster, then either
+# `kubectl apply -f k8s/trmnl.yaml` or vendor this into your GitOps repo
+# (Flux / Argo CD). See k8s/README.md for the image-delivery workflow.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trmnl
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trmnl-config
+  namespace: trmnl
+data:
+  # Calendar/clock render from the container clock — set your timezone.
+  TZ: "Etc/UTC"
+  # Weather (Open-Meteo). Clear all three to disable the weather widget.
+  TRMNL_LAT: "51.5074"
+  TRMNL_LON: "-0.1278"
+  TRMNL_LOCATION: "London"
+  # App settings (these mirror the server's own defaults).
+  TRMNL_REFRESH_RATE: "1800"    # seconds the device sleeps between polls
+  TRMNL_RENDER_INTERVAL: "300"  # seconds between server-side re-renders
+  TRMNL_PHOTO_STRATEGY: "shuffle"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trmnl
+  namespace: trmnl
+spec:
+  replicas: 1
+  # hostPath photos are shared on one node; Recreate avoids two Chromes briefly
+  # overlapping on a rollout. Downtime is seconds; the device polls every 30 min.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: trmnl
+  template:
+    metadata:
+      labels:
+        app: trmnl
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: trmnl
+          # Your image — push the Docker build to a registry your cluster can pull.
+          image: your-registry/trmnl:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: trmnl-config
+          volumeMounts:
+            - name: photos              # shared image library (read-only here)
+              mountPath: /photos
+              readOnly: true
+            - name: tmp                 # Chrome scratch + rendered dashboard.png
+              mountPath: /tmp
+            - name: data                # devices.json — ephemeral for the MVP
+              mountPath: /data
+          readinessProbe:               # ready once the first render exists
+            httpGet:
+              path: /dashboard.png
+              port: 8080
+            initialDelaySeconds: 8
+            periodSeconds: 10
+          livenessProbe:                # process up = listener accepting
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+      volumes:
+        # Drop images into this host dir (scp, or a future upload server). Shared,
+        # so other pods can mount the same path. Swap for a PVC if you prefer.
+        - name: photos
+          hostPath:
+            path: /srv/trmnl/photos
+            type: DirectoryOrCreate
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trmnl
+  namespace: trmnl
+spec:
+  # LoadBalancer so the device can reach it over the LAN. On k3s, ServiceLB
+  # (Klipper) binds this port on the node IP -> http://<node-ip>:8090.
+  type: LoadBalancer
+  selector:
+    app: trmnl
+  ports:
+    - name: http
+      port: 8090
+      targetPort: 8080
+      protocol: TCP
