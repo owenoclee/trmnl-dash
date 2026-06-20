@@ -113,6 +113,7 @@ type weatherResponse struct {
 		Temperature       []float64 `json:"temperature_2m"`
 		WindSpeed         []float64 `json:"wind_speed_10m"`
 		PrecipProbability []float64 `json:"precipitation_probability"`
+		UVIndex           []float64 `json:"uv_index"`
 	} `json:"hourly"`
 	Daily struct {
 		TempMax []float64 `json:"temperature_2m_max"`
@@ -129,6 +130,7 @@ type weatherData struct {
 	HourlyTemp   []float64
 	HourlyWind   []float64
 	HourlyPrecip []float64
+	HourlyUV     []float64
 	FetchedAt    time.Time
 }
 
@@ -149,7 +151,7 @@ func fetchWeather(lat, lon float64) (*weatherData, error) {
 		"https://api.open-meteo.com/v1/forecast"+
 			"?latitude=%.4f&longitude=%.4f"+
 			"&current=temperature_2m,weather_code,wind_speed_10m"+
-			"&hourly=temperature_2m,wind_speed_10m,precipitation_probability"+
+			"&hourly=temperature_2m,wind_speed_10m,precipitation_probability,uv_index"+
 			"&daily=temperature_2m_max,temperature_2m_min"+
 			"&wind_speed_unit=mph"+
 			"&forecast_days=1&timezone=auto",
@@ -181,6 +183,7 @@ func fetchWeather(lat, lon float64) (*weatherData, error) {
 		HourlyTemp:   cap24(wr.Hourly.Temperature),
 		HourlyWind:   cap24(wr.Hourly.WindSpeed),
 		HourlyPrecip: cap24(wr.Hourly.PrecipProbability),
+		HourlyUV:     cap24(wr.Hourly.UVIndex),
 		FetchedAt:    time.Now(),
 	}
 	if len(wr.Daily.TempMax) > 0 {
@@ -247,6 +250,7 @@ type dashJSON struct {
 	HourlyTemp   []float64 `json:"hourlyTemp"`
 	HourlyWind   []float64 `json:"hourlyWind"`
 	HourlyPrecip []float64 `json:"hourlyPrecip"`
+	HourlyUV     []float64 `json:"hourlyUV"`
 }
 
 // dashboardData is the Go template context. DataJSON carries the weather blob
@@ -270,6 +274,7 @@ func buildDashboard(wd *weatherData) dashboardData {
 		HourlyTemp:   wd.HourlyTemp,
 		HourlyWind:   wd.HourlyWind,
 		HourlyPrecip: wd.HourlyPrecip,
+		HourlyUV:     wd.HourlyUV,
 	}
 	jsonBytes, _ := json.Marshal(d)
 	return dashboardData{DataJSON: template.JS(jsonBytes)}
