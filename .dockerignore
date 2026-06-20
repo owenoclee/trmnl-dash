@@ -1,0 +1,25 @@
+# Keep the build context tiny — only go.mod/go.sum, server.go, dashboard.html
+# and docker-entrypoint.sh are needed to build the image.
+.git
+.gitignore
+*.md
+
+# macOS preview tool + its build artifacts (not used in the container)
+viewer.swift
+.viewer
+Makefile
+.tool-versions
+
+# Runtime / local-only files
+photos/
+*.png
+trmnl-*.html
+devices.json
+.env
+.env.example
+
+# Build outputs (the image builds its own binary)
+server
+trmnl
+
+.DS_Store

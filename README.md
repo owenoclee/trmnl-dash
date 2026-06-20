@@ -79,6 +79,50 @@ So in practice `/api/setup` may never be hit. To handle that, `/api/display` **a
 
 Device registrations are persisted to `devices.json` (gitignored).
 
+## Docker
+
+The server ships as a container image with headless Chromium baked in, so it
+can run anywhere (a homelab box, a k3s cluster) without a local Chrome install.
+
+```bash
+docker compose up --build      # build + run, photos from ./photos
+# or, by hand:
+docker build -t trmnl:latest .
+docker run -p 8080:8080 \
+  -e TZ=Europe/London -e TRMNL_LAT=51.5074 -e TRMNL_LON=-0.1278 -e TRMNL_LOCATION=London \
+  -v /path/to/your/photos:/photos:ro \
+  -v trmnl-data:/data \
+  trmnl:latest
+```
+
+The device then points at `http://<docker-host-ip>:8080` exactly as in the
+[device setup](#device-setup) above.
+
+### Configuration
+
+All settings are environment variables (see `docker-compose.yml`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TZ` | `UTC` | Timezone for the rendered calendar/clock — **set this** |
+| `TRMNL_LAT` / `TRMNL_LON` / `TRMNL_LOCATION` | _(unset)_ | Weather location; unset disables the weather widget |
+| `TRMNL_REFRESH_RATE` | `1800` | Seconds the device sleeps between polls |
+| `TRMNL_RENDER_INTERVAL` | `300` | Seconds between server-side re-renders |
+| `TRMNL_PHOTO_STRATEGY` | `shuffle` | Photo cycling: `random` \| `shuffle` \| `alphabetical` |
+| `TRMNL_ADDR` | `:8080` | Listen address |
+
+### Volumes
+
+| Mount | Mode | Purpose |
+|---|---|---|
+| `/photos` | read-only | Your image library — bind-mount any local directory here |
+| `/data` | read-write | Persists `devices.json` (the device's adopted token) across restarts |
+
+`dashboard.html` is baked into the image; rebuild to pick up template changes.
+Inter is loaded from the Google Fonts CDN at render time, so the container needs
+outbound internet (it already does, for weather) — bundled Noto/Liberation faces
+are the fallback if the CDN is unreachable.
+
 ## Preview tool (`viewer.swift`)
 
 A small AppKit app compiled by `swiftc`. It:

@@ -439,6 +439,16 @@ func initChrome() error {
 		chromedp.Flag("force-device-scale-factor", "1"),
 		chromedp.WindowSize(1872, 1404),
 	)
+	// In a container Chromium has no usable sandbox (no setuid helper / user
+	// namespaces) and the default 64 MB /dev/shm is too small for a render this
+	// large, which crashes the tab. CHROME_NO_SANDBOX (set by the Docker image)
+	// opts into both fixes; it stays off on a normal desktop install.
+	if os.Getenv("CHROME_NO_SANDBOX") != "" {
+		opts = append(opts,
+			chromedp.NoSandbox,
+			chromedp.Flag("disable-dev-shm-usage", true),
+		)
+	}
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	chromeCtx = ctx

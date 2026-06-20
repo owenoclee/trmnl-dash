@@ -1,6 +1,7 @@
 .viewer
 dashboard.png
 server
+trmnl
 devices.json
 .env
 trmnl-*.html

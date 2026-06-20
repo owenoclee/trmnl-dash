@@ -1,0 +1,33 @@
+# Local container run. Mirrors how you'd wire this up in k3s later:
+#   - photos bind-mounted read-only        → emptyDir / hostPath / PVC
+#   - /data volume for devices.json         → PVC (must persist)
+#   - settings via environment              → ConfigMap
+services:
+  trmnl:
+    build: .
+    image: trmnl:latest
+    container_name: trmnl
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Render the calendar/clock in your local time, not UTC.
+      TZ: Europe/London
+      # Weather (Open-Meteo). Leave unset to disable the weather widget.
+      TRMNL_LAT: "51.5074"
+      TRMNL_LON: "-0.1278"
+      TRMNL_LOCATION: London
+      # App settings (all optional; these are the server's own defaults).
+      TRMNL_REFRESH_RATE: "1800"     # seconds the device sleeps between polls
+      TRMNL_RENDER_INTERVAL: "300"   # seconds between server-side re-renders
+      TRMNL_PHOTO_STRATEGY: shuffle  # random | shuffle | alphabetical
+    volumes:
+      # Your image library — point the left side at any local dir. Read-only:
+      # the server only reads photos, never writes them.
+      - ./photos:/photos:ro
+      # Persists the device's adopted API token across restarts. Without this,
+      # the device re-adopts on the next poll (harmless) but the registry resets.
+      - trmnl-data:/data
+
+volumes:
+  trmnl-data:
