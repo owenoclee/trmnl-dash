@@ -292,7 +292,11 @@ func listPhotoURLs() []string {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.IsDir() {
+		// Skip subdirs and dotfiles. The latter guards against macOS junk that
+		// carries an image extension but isn't a decodable image — .DS_Store and
+		// especially "._name.jpg" AppleDouble files, which otherwise enter the
+		// rotation and render as a blank photo when selected.
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		if photoExts[strings.ToLower(filepath.Ext(e.Name()))] {
