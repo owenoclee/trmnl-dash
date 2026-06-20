@@ -32,6 +32,19 @@ make serve      # start BYOS server for the physical device
 make clean      # remove dashboard.png, .viewer binary, and server binary
 ```
 
+## Tuning the chart layout
+
+Open `dashboard.html` directly in a browser (`file://`) to experiment with the
+charts: a control panel of sliders (chart height, gaps, notch depth/width, font
+size, …) re-renders live. When it looks right, click **Apply → config.json** to
+download the current values.
+
+Drop that `config.json` next to the server (it's read at render time — no
+restart needed) and **commit it** so the look ships everywhere: local `make
+serve` reads `./config.json`, and the Docker image bakes it in for the k3s
+deployment (rebuild after committing). A missing or invalid file falls back to
+the page's built-in defaults.
+
 ## BYOS server
 
 `server.go` implements the [TRMNL BYOS](https://docs.trmnl.com/go/diy/byos) (Bring Your Own Server) protocol so the physical device can pull content directly from your machine.

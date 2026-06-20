@@ -41,11 +41,15 @@ ENV CHROME_BIN=/usr/bin/chromium \
     TRMNL_TEMPLATE=/app/dashboard.html \
     TRMNL_OUT=/tmp/dashboard.png \
     TRMNL_PHOTOS_DIR=/photos \
-    TRMNL_DEVICES_FILE=/data/devices.json
+    TRMNL_DEVICES_FILE=/data/devices.json \
+    TRMNL_CONFIG=/app/config.json
 
 WORKDIR /app
 COPY --from=build /out/trmnl /usr/local/bin/trmnl
 COPY dashboard.html /app/dashboard.html
+# Chart tunables baked into the image. Edit via the preview panel's Apply button,
+# commit the downloaded config.json, and rebuild to ship the new look.
+COPY config.json /app/config.json
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

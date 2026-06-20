@@ -253,6 +253,11 @@
   <!-- Photo: Go injects the server-selected image (per --photo-strategy) -->
   <script type="application/json" id="photos-data">{{.PhotosJSON}}</script>
 
+  <!-- Tunables: Go injects config.json here so a render uses the applied values.
+       Empty/literal when opened directly in a browser — the page then falls back
+       to the built-in cfg defaults, and the panel's Apply button writes this file. -->
+  <script type="application/json" id="chart-config">{{.ConfigJSON}}</script>
+
   <!-- Chart rendering — pure presentation, no data fetching -->
   <script>
     (function () {
@@ -281,15 +286,24 @@
       // Tunable config — driven by sliders in browser preview, fixed at render time
       // ---------------------------------------------------------------------------
       const cfg = {
-        hExt: 0,                    // h-line left overhang past chart edge
         labelGap: 14,                   // gap between chart edge and y-axis label
         notch: 9,                    // v-line notch depth (px into chart)
         notchSm: 4,                    // minor (unlabelled) tick notch depth
+        notchW: 1,                    // v-line notch stroke width (px)
         vExt: 36,                   // v-line extension below last chart
         chartH: 136,                  // chart height
         chartGap: 52,                   // vertical gap between charts
         labelFs: 25,                   // label font size
       };
+
+      // Overlay the server-applied config (config.json, injected above). Only the
+      // keys present there are overridden, so defaults survive for anything new.
+      // No-op when opened directly: the placeholder isn't valid JSON, so we keep
+      // the defaults and let the Apply button generate the file.
+      try {
+        const saved = JSON.parse(document.getElementById('chart-config').textContent);
+        if (saved && typeof saved === 'object') Object.assign(cfg, saved);
+      } catch (e) { /* opened from disk — keep defaults */ }
 
       // ---------------------------------------------------------------------------
       // Helpers
@@ -331,7 +345,7 @@
       }
       function blendTick(el) {
         return el
-          .attr('stroke', 'white').attr('stroke-width', GRID_SW)
+          .attr('stroke', 'white').attr('stroke-width', cfg.notchW)
           .attr('shape-rendering', 'crispEdges').style('mix-blend-mode', 'difference');
       }
 
@@ -339,7 +353,7 @@
       // Render — clears and redraws the chart SVG from current cfg
       // ---------------------------------------------------------------------------
       function render() {
-        const {hExt, labelGap, notch, notchSm, vExt, chartH, chartGap, labelFs} = cfg;
+        const {labelGap, notch, notchSm, vExt, chartH, chartGap, labelFs} = cfg;
         const chartX0 = 0;                       // flush to the left edge of the column
 
         const series = [
@@ -446,12 +460,8 @@
           [0, 0.5, 1].forEach(frac => {
             const y = px(cy + chartH * frac);
             if (frac === 0.5) {
-              blendLine(svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX1).attr('y2', y));
-            } else if (frac === 0) {
-              svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX1).attr('y2', y)
-                .attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges');
+              blendLine(svg.append('line').attr('x1', chartX0).attr('y1', y).attr('x2', chartX1).attr('y2', y));
             } else {
-              styleLine(svg.append('line').attr('x1', chartX0 - hExt).attr('y1', y).attr('x2', chartX0).attr('y2', y)).attr('stroke', 'black');
               svg.append('line').attr('x1', chartX0).attr('y1', y).attr('x2', chartX1).attr('y2', y)
                 .attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges');
             }
@@ -656,10 +666,10 @@
         const SLIDERS = [
           {key: 'chartH', label: 'Chart height', min: 30, max: 200, step: 2},
           {key: 'chartGap', label: 'Gap between charts', min: 0, max: 150, step: 2},
-          {key: 'hExt', label: 'H-line overhang', min: 0, max: 100, step: 1},
           {key: 'labelGap', label: 'Label ↔ h-line gap', min: 0, max: 30, step: 1},
           {key: 'notch', label: 'Notch depth', min: 0, max: 80, step: 1},
           {key: 'notchSm', label: 'Minor notch depth', min: 0, max: 40, step: 1},
+          {key: 'notchW', label: 'Notch width', min: 1, max: 8, step: 1},
           {key: 'vExt', label: 'V-line overhang', min: 0, max: 100, step: 1},
           {key: 'labelFs', label: 'Font size', min: 8, max: 60, step: 1},
         ];
@@ -692,6 +702,31 @@
           row.appendChild(input);
           panel.appendChild(row);
         });
+
+        // Apply — download the current cfg as config.json. Drop it next to the
+        // server (or commit it) and the next render picks up these values.
+        const apply = Object.assign(document.createElement('button'), {textContent: 'Apply → config.json'});
+        Object.assign(apply.style, {
+          width: '100%', marginTop: '10px', padding: '7px', cursor: 'pointer',
+          font: 'inherit', borderRadius: '6px', border: '1px solid #999',
+          background: '#f3f3f3',
+        });
+        const hint = Object.assign(document.createElement('div'), {
+          textContent: 'Save next to the server (or commit it), then re-render.',
+        });
+        Object.assign(hint.style, {color: '#777', fontSize: '10px', marginTop: '5px', lineHeight: '1.4'});
+        apply.addEventListener('click', () => {
+          const blob = new Blob([JSON.stringify(cfg, null, 2) + '\n'], {type: 'application/json'});
+          const a = Object.assign(document.createElement('a'), {href: URL.createObjectURL(blob), download: 'config.json'});
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(a.href);
+          apply.textContent = 'Downloaded ✓';
+          setTimeout(() => {apply.textContent = 'Apply → config.json';}, 1500);
+        });
+        panel.appendChild(apply);
+        panel.appendChild(hint);
 
         document.body.appendChild(panel);
       }

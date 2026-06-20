@@ -14,6 +14,7 @@ exec trmnl \
   --tmpl "${TRMNL_TEMPLATE:-/app/dashboard.html}" \
   --out "${TRMNL_OUT:-/tmp/dashboard.png}" \
   --devices "${TRMNL_DEVICES_FILE:-/data/devices.json}" \
+  --config "${TRMNL_CONFIG:-/app/config.json}" \
   --photos "${TRMNL_PHOTOS_DIR:-/photos}" \
   ${TRMNL_REFRESH_RATE:+--refresh-rate "$TRMNL_REFRESH_RATE"} \
   ${TRMNL_RENDER_INTERVAL:+--render-interval "$TRMNL_RENDER_INTERVAL"} \

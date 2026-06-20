@@ -55,6 +55,7 @@ var (
 	byKey       = make(map[string]*Device)
 	renderMu    sync.Mutex
 	devicesPath string
+	configPath  string
 
 	// photosDir holds the images cycled into the dashboard's bottom-left slot.
 	// renderBaseURL is the loopback URL the headless render uses to fetch them
@@ -256,10 +257,13 @@ type dashJSON struct {
 // dashboardData is the Go template context. DataJSON carries the weather blob
 // (empty when weather is unconfigured, which makes the page fall back to its
 // built-in sample data); PhotosJSON is injected independently so the photo
-// cycling works regardless of whether weather is available.
+// cycling works regardless of whether weather is available. ConfigJSON carries
+// the tunables from config.json so a render uses the values dialled in via the
+// preview panel (empty → the page keeps its built-in cfg defaults).
 type dashboardData struct {
 	DataJSON   template.JS
 	PhotosJSON template.JS
+	ConfigJSON template.JS
 }
 
 func buildDashboard(wd *weatherData) dashboardData {
@@ -278,6 +282,29 @@ func buildDashboard(wd *weatherData) dashboardData {
 	}
 	jsonBytes, _ := json.Marshal(d)
 	return dashboardData{DataJSON: template.JS(jsonBytes)}
+}
+
+// loadConfigJSON reads the tunables file (written by the preview panel's Apply
+// button) and returns it for injection into the template. It's re-read on every
+// render, so replacing config.json takes effect on the next render with no
+// restart. Missing file → empty (page keeps its built-in defaults); invalid
+// JSON → empty + a warning, so a botched edit degrades to defaults rather than
+// breaking the render.
+func loadConfigJSON() template.JS {
+	if configPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "" // no config → built-in defaults
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(data, &obj); err != nil {
+		log.Printf("[config] ignoring invalid %s: %v", configPath, err)
+		return ""
+	}
+	b, _ := json.Marshal(obj)
+	return template.JS(b)
 }
 
 // photoExts is the set of image types served from the photos directory.
@@ -655,6 +682,7 @@ func currentDashboardData(lat, lon float64, location string) dashboardData {
 		}
 	}
 	data.PhotosJSON = currentPhotoJSON() // server-selected photo, independent of weather
+	data.ConfigJSON = loadConfigJSON()   // tunables applied via the preview panel
 	_ = location                   // retained for future footer use
 	return data
 }
@@ -758,6 +786,7 @@ func main() {
 	tmplSrc     := flag.String("tmpl", "dashboard.html", "HTML template source")
 	pngOut      := flag.String("out", "dashboard.png", "PNG output path")
 	dp          := flag.String("devices", "devices.json", "Device registry file")
+	cfgFile     := flag.String("config", "config.json", "Chart tunables file (written by the preview panel's Apply button)")
 	photos      := flag.String("photos", "photos", "Directory of images to cycle through")
 	renderEvery := flag.Int("render-interval", 300, "Seconds between background re-renders (production)")
 	photoStrat  := flag.String("photo-strategy", "shuffle", "Photo cycling: random | shuffle | alphabetical")
@@ -767,6 +796,7 @@ func main() {
 	flag.Parse()
 
 	devicesPath = *dp
+	configPath = *cfgFile
 	photosDir = *photos
 	renderBaseURL = loopbackURL(*addr)
 	photoStrategy = *photoStrat
@@ -805,6 +835,11 @@ func main() {
 		log.Printf("  location:       not configured (weather disabled)")
 	}
 	log.Printf("  template:       %s", *tmplSrc)
+	if _, err := os.Stat(configPath); err == nil {
+		log.Printf("  config file:    %s (applied)", configPath)
+	} else {
+		log.Printf("  config file:    %s (absent; using built-in defaults)", configPath)
+	}
 	log.Printf("  devices file:   %s", devicesPath)
 	log.Printf("  devices loaded: %d", len(byMAC))
 	log.Printf("  photos:         %s (%d found)", photosDir, len(listPhotoURLs()))
