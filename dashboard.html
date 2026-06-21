@@ -764,6 +764,68 @@
         ctx.putImageData(imgData, 0, 0);
       }
 
+      // Generative fallback art — when the server has no photo (debug mode, or
+      // opening dashboard.html straight from disk) the slot would sit empty, so
+      // fill it with a 1-bit Truchet pattern instead. Each tile draws one of two
+      // pairs of quarter-circle arcs; every arc end lands on an edge midpoint, so
+      // strokes always join across tiles into one continuous flowing maze. Grid
+      // density, stroke weight and per-tile orientation are randomised, so it's a
+      // different pattern on every render. Black on white to stay light under the
+      // airy calendar above it; thresholded at the end to keep it truly 1-bit.
+      function paintTruchet(canvas) {
+        const w = canvas.clientWidth, h = canvas.clientHeight;
+        if (!w || !h) return;
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, w, h);
+
+        // Square-ish tiles sized off the short edge, so the slot's aspect doesn't
+        // skew them. 6–9 rows → a comfortably legible density on the panel.
+        const rows = 6 + Math.floor(Math.random() * 4);
+        const s = h / rows;
+        const cols = Math.ceil(w / s);
+        const m = s / 2;                          // edge-midpoint offset / arc radius
+        const HALF = Math.PI / 2;
+
+        ctx.strokeStyle = '#000';
+        ctx.lineCap = 'round';
+        ctx.lineWidth = Math.max(2, s * (0.10 + Math.random() * 0.06));
+
+        const arc = (cx, cy, a0) => {ctx.beginPath(); ctx.arc(cx, cy, m, a0, a0 + HALF); ctx.stroke();};
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+          const x = c * s, y = r * s;
+          if (Math.random() < 0.5) {             // arcs in the TL + BR corners
+            arc(x, y, 0);
+            arc(x + s, y + s, Math.PI);
+          } else {                               // arcs in the TR + BL corners
+            arc(x + s, y, HALF);
+            arc(x, y + s, 3 * HALF);
+          }
+        }
+
+        // Frame the panel (rounded to match the calendar grid / photo slot; the
+        // canvas's CSS border-radius clips the corners to suit).
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(1, 1, w - 2, h - 2, 30);
+        ctx.stroke();
+
+        // Hard threshold → pure black/white, dropping the arcs' anti-aliased grays.
+        const im = ctx.getImageData(0, 0, w, h), d = im.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const v = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) < 128 ? 0 : 255;
+          d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+        }
+        ctx.putImageData(im, 0, 0);
+      }
+
+      const paintFallback = () => {
+        try {paintTruchet(document.getElementById('photo-canvas'));}
+        catch (e) {console.error('fallback art failed', e);}
+        requestAnimationFrame(renderDone);
+      };
+
       if (PHOTOS.length) {
         const img = new Image();
         img.crossOrigin = 'anonymous';     // CORS-clean so getImageData isn't tainted
@@ -772,10 +834,10 @@
           catch (e) {console.error('dither failed', e);}
           requestAnimationFrame(renderDone);   // ensure the canvas paints before capture
         };
-        img.onerror = () => {console.error('photo load failed', img.src); renderDone();};
+        img.onerror = () => {console.error('photo load failed', img.src); paintFallback();};
         img.src = PHOTOS[0];   // the server chooses which photo (per --photo-strategy)
       } else {
-        renderDone();
+        paintFallback();
       }
 
       // ---------------------------------------------------------------------------
