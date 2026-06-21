@@ -279,6 +279,7 @@
       const GUTTER = 102;                       // column gap = left/right page margin
       const COL_W = (CONTENT_W - GUTTER) / 2;  // width of each of the two columns (783)
       const N_DAY = 16;
+      const START_HOUR = 7;                     // first hour on the x-axis (index 0); window is START_HOUR … START_HOUR+N_DAY-1
       const GRID_SW = 1;
       const FONT = "'Inter', system-ui, sans-serif";
 
@@ -343,7 +344,13 @@
         return `${sign}${int}`;
       }
 
-      function sliceDay(arr) {return arr.slice(7, 23);}
+      function sliceDay(arr) {return arr.slice(START_HOUR, START_HOUR + N_DAY);}
+
+      // 12-hour clock parts for an hour-of-day, e.g. 15 → {h: '3', ap: 'PM'} — for axis labels.
+      function hourParts(h) {
+        const ap = (h % 24) < 12 ? 'AM' : 'PM';
+        return {h: String(h % 12 === 0 ? 12 : h % 12), ap};
+      }
 
       function styleLine(el) {
         return el
@@ -431,7 +438,7 @@
         // Pass 2 — blend-mode v-ticks (before h-lines so h-lines render on top, covering intersections)
         const timeStep = chartW / (N_DAY - 1);
         const labelY = chartsH + vExt + 4;
-        const majorIdxs = new Set([0, 5, 10, 15]);
+        const majorIdxs = new Set([0, 3, 6, 9, 12, 15]);   // labelled hours: every 3rd point
 
         // Current-time line geometry — computed here, before the notches, so any notch
         // the line covers can be suppressed. A notch left under the line would make the
@@ -441,7 +448,7 @@
         // inversion and read cleanly against the chart.
         const now = new Date();
         const nowH = nowHour != null ? nowHour : now.getHours() + now.getMinutes() / 60;
-        const nowIdx = nowH - 7;                 // 0 = 07:00 (left edge) … 15 = 22:00 (right edge)
+        const nowIdx = nowH - START_HOUR;        // 0 = START_HOUR (left edge) … N_DAY-1 (right edge)
         const nowOn = nowIdx >= 0 && nowIdx <= N_DAY - 1;
         const nowNx = nowOn ? crispX(chartX0 + nowIdx * timeStep, cfg.nowW) : null;
         // A notch at column `vx` is covered when its stroke overlaps the now-line's.
@@ -464,7 +471,7 @@
           });
         }
 
-        [[0, '7'], [5, '12'], [10, '17'], [15, '22']].forEach(([idx, label], li, all) => {
+        [...majorIdxs].sort((a, b) => a - b).forEach((idx, li, all) => {
           const labelX = px(chartX0 + idx * timeStep);
           const isFirst = li === 0, isLast = li === all.length - 1;
           const isOuter = isFirst || isLast;
@@ -490,9 +497,14 @@
             tick(svg.append('line').attr('x1', vx).attr('y1', top - topExt + 1).attr('x2', vx).attr('y2', top + notch + 1));
             tick(svg.append('line').attr('x1', vx).attr('y1', bot - notch).attr('x2', vx).attr('y2', bot + botExt));
           });
-          svg.append('text').attr('x', labelX).attr('y', labelY)
-            .attr('text-anchor', 'middle').attr('dominant-baseline', 'hanging')
-            .attr('font-size', labelFs).attr('font-family', FONT).text(label);
+          // Hour label as "<12h> <small AM/PM>", baseline-aligned and centred on the tick
+          // — mirrors the y-axis value+unit styling. The baseline is dropped by the cap
+          // height so the digits sit where the old hanging top did.
+          const {h: hLabel, ap} = hourParts(START_HOUR + idx);
+          const t = svg.append('text').attr('x', labelX).attr('y', labelY + labelFs * 0.72)
+            .attr('text-anchor', 'middle').attr('font-family', FONT);
+          t.append('tspan').attr('font-size', labelFs).text(hLabel);
+          t.append('tspan').attr('font-size', unitFs).attr('dx', 2).text(ap);
         });
 
         // Pass 3 — h-lines, labels, chart name (on top of blend-mode ticks, covering intersection artifacts)
@@ -789,8 +801,9 @@
             const hh = Math.floor(h), mm = Math.round((h - hh) * 60);
             return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
           };
+          const lastHour = START_HOUR + N_DAY - 1;
           const realNow = new Date();
-          const init = Math.min(22, Math.max(7, realNow.getHours() + realNow.getMinutes() / 60));
+          const init = Math.min(lastHour, Math.max(START_HOUR, realNow.getHours() + realNow.getMinutes() / 60));
           nowHour = init;   // preview drives "now" from here on; headless render is unaffected
 
           const row = document.createElement('div');
@@ -799,7 +812,7 @@
           const val = Object.assign(document.createElement('span'), {textContent: fmtTime(init)});
           Object.assign(val.style, {float: 'right', color: '#555', minWidth: '44px', textAlign: 'right'});
           const input = Object.assign(document.createElement('input'), {
-            type: 'range', min: 7, max: 22, step: 0.25, value: init,
+            type: 'range', min: START_HOUR, max: lastHour, step: 0.25, value: init,
           });
           Object.assign(input.style, {width: '100%', margin: '2px 0 6px', display: 'block'});
           input.addEventListener('input', () => {
