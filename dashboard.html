@@ -227,7 +227,7 @@
       <div class="summary">
         <div class="condition" id="w-condition" style="display:none"></div>
         <div class="details"><span id="w-low">—</span>&deg; to <span id="w-high">—</span>&deg;, <span
-            id="w-wind">—</span> mph wind</div>
+            id="w-wind">—</span> mph wind<span id="w-peakuv"></span></div>
       </div>
     </div>
 
@@ -584,6 +584,21 @@
       document.getElementById('w-high').textContent = DATA.tempMax != null ? Math.round(DATA.tempMax) : '—';
       document.getElementById('w-low').textContent = DATA.tempMin != null ? Math.round(DATA.tempMin) : '—';
       document.getElementById('w-wind').textContent = DATA.windMPH != null ? Math.round(DATA.windMPH) : '—';
+
+      // Peak UV — the day's max hourly UV and the hour it occurs. Index i = hour i,
+      // so the argmax over the full 24h array gives the peak hour directly. Appended
+      // to the details line; omitted when the day's peak rounds to 0 (no UV worth noting).
+      const uv = DATA.hourlyUV;
+      if (Array.isArray(uv) && uv.length) {
+        let pi = 0;
+        for (let i = 1; i < uv.length; i++) if (uv[i] > uv[pi]) pi = i;
+        if (Math.round(uv[pi]) >= 1) {
+          const {h: ph, ap: pap} = hourParts(pi);
+          document.getElementById('w-peakuv').textContent =
+            `, peak UV ${Math.round(uv[pi])} around ${ph}:00${pap}`;
+        }
+      }
+
       if (DATA.condition) {
         const el = document.getElementById('w-condition');
         el.textContent = DATA.condition;
