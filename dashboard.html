@@ -290,6 +290,7 @@
         notch: 9,                    // v-line notch depth (px into chart)
         notchSm: 4,                    // minor (unlabelled) tick notch depth
         notchW: 1,                    // v-line notch stroke width (px)
+        nowW: 2,                    // current-time line stroke width (px)
         vExt: 36,                   // v-line extension below last chart
         chartH: 136,                  // chart height
         chartGap: 52,                   // vertical gap between charts
@@ -305,10 +306,20 @@
         if (saved && typeof saved === 'object') Object.assign(cfg, saved);
       } catch (e) { /* opened from disk — keep defaults */ }
 
+      // Preview-only override for "now", as a fractional hour (driven by a slider in
+      // the controls panel). Stays null in headless render → real host clock. NOT part
+      // of cfg, so it's never written to / read from config.json.
+      let nowHour = null;
+
       // ---------------------------------------------------------------------------
       // Helpers
       // ---------------------------------------------------------------------------
       const px = n => Math.round(n) + 0.5;
+      // Snap a stroke's centre to the pixel grid so crispEdges renders it at a
+      // consistent width: an EVEN width must centre on an integer (its two edges
+      // land on whole-pixel boundaries), an ODD width on a half-pixel. The wrong
+      // phase makes e.g. a 2px line straddle three columns and render unevenly.
+      const crispX = (n, w) => Math.round(n) + (w % 2 ? 0.5 : 0);
 
       function fmtDecimal(v) {
         const r = Math.round(v * 10) / 10;
@@ -422,10 +433,29 @@
         const labelY = chartsH + vExt + 4;
         const majorIdxs = new Set([0, 5, 10, 15]);
 
+        // Current-time line geometry — computed here, before the notches, so any notch
+        // the line covers can be suppressed. A notch left under the line would make the
+        // blend-mode line invert against the notch (itself already inverted vs the fill)
+        // instead of against the chart, giving a "double-inverted" segment. The line
+        // already marks that column, so dropping the covered notch lets it own the
+        // inversion and read cleanly against the chart.
+        const now = new Date();
+        const nowH = nowHour != null ? nowHour : now.getHours() + now.getMinutes() / 60;
+        const nowIdx = nowH - 7;                 // 0 = 07:00 (left edge) … 15 = 22:00 (right edge)
+        const nowOn = nowIdx >= 0 && nowIdx <= N_DAY - 1;
+        const nowNx = nowOn ? crispX(chartX0 + nowIdx * timeStep, cfg.nowW) : null;
+        // A notch at column `vx` is covered when its stroke overlaps the now-line's.
+        const underNow = vx => nowNx != null && Math.abs(vx - nowNx) < (cfg.nowW + notchW) / 2;
+        // The line stands on a labelled hour when it covers that hour's (major) notch —
+        // then it must reach the time label, standing in for the notch's connector.
+        const nowOnMajor = nowOn && majorIdxs.has(Math.round(nowIdx)) &&
+          underNow(crispX(chartX0 + Math.round(nowIdx) * timeStep, notchW));
+
         // Minor ticks — every unlabelled hour
         for (let idx = 0; idx < N_DAY; idx++) {
           if (majorIdxs.has(idx)) continue;
-          const vx = px(chartX0 + idx * timeStep);
+          const vx = crispX(chartX0 + idx * timeStep, notchW);
+          if (underNow(vx)) continue;   // the now-line covers this column — let it own the inversion
           series.forEach((_, ci) => {
             const top = ci * (chartH + chartGap);
             const bot = top + chartH;
@@ -444,12 +474,15 @@
           // (100%) black chart shows the notch as a bump sticking out the side.
           // They stay solid black (no blend-mode inversion), unlike inner notches.
           const vx = isOuter
-            ? (isFirst ? chartX0 + notchW / 2 : chartX1 - notchW / 2)
-            : labelX;
+            ? (isFirst ? chartX0 + notchW / 2 : Math.round(chartX1) - notchW / 2)
+            : crispX(chartX0 + idx * timeStep, notchW);
           const tick = el => isOuter
             ? el.attr('stroke', 'black').attr('stroke-width', notchW).attr('shape-rendering', 'crispEdges')
             : blendTick(el);
-          series.forEach((_, ci) => {
+          // Drop the notch entirely where the now-line covers it — the line stands in
+          // for it, and a kept notch would corrupt the line's inversion. The time label
+          // below is always drawn; the now-line extends down to it (see Pass 4).
+          if (!underNow(vx)) series.forEach((_, ci) => {
             const top = ci * (chartH + chartGap);
             const bot = top + chartH;
             const topExt = isOuter ? 0 : notch;
@@ -463,16 +496,32 @@
         });
 
         // Pass 3 — h-lines, labels, chart name (on top of blend-mode ticks, covering intersection artifacts)
+        // Draw a horizontal grid line, but leave a gap where the now-line crosses so the
+        // (blend-mode) now-line inverts against the chart there, not against this h-line.
+        // The gap is exactly covered by the now-line; stroke-dashoffset keeps the dashed
+        // mid-line's rhythm continuous across it (a harmless no-op for the solid edges).
+        const hLine = (y, styleFn) => {
+          const seg = (x1, x2) => styleFn(svg.append('line')
+            .attr('x1', x1).attr('y1', y).attr('x2', x2).attr('y2', y)
+            .attr('stroke-dashoffset', x1 - chartX0));
+          if (nowNx != null && nowNx > chartX0 && nowNx < chartX1) {
+            const g = cfg.nowW / 2;
+            seg(chartX0, nowNx - g);
+            seg(nowNx + g, chartX1);
+          } else {
+            seg(chartX0, chartX1);
+          }
+        };
+
         series.forEach(({unit, name}, ci) => {
           const {cy, dMin, dMax} = scales[ci];
 
           [0, 0.5, 1].forEach(frac => {
             const y = px(cy + chartH * frac);
             if (frac === 0.5) {
-              blendLine(svg.append('line').attr('x1', chartX0).attr('y1', y).attr('x2', chartX1).attr('y2', y));
+              hLine(y, blendLine);
             } else {
-              svg.append('line').attr('x1', chartX0).attr('y1', y).attr('x2', chartX1).attr('y2', y)
-                .attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges');
+              hLine(y, el => el.attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges'));
             }
           });
 
@@ -497,6 +546,23 @@
             .attr('fill', 'black')
             .text(name);
         });
+
+        // Pass 4 — current-time line. A solid vertical rule spanning the full stack of
+        // charts at the host clock's position on the 7–22h axis (geometry computed in
+        // Pass 2). Drawn last (over the h-lines) so it stays continuous across charts and
+        // the gaps between them. Blend-difference (white) so it inverts to stay visible
+        // over both the black fills and the white background — and the notches it covers
+        // were suppressed in Pass 2 so they don't corrupt that inversion. Only drawn when
+        // "now" falls inside the charted window.
+        if (nowOn) {
+          // Reach down to the time label when standing on a labelled hour, replacing the
+          // suppressed notch's connector; otherwise stop at the bottom of the last chart.
+          const y2 = chartsH + (nowOnMajor ? vExt : 0);
+          svg.append('line')
+            .attr('x1', nowNx).attr('y1', 0).attr('x2', nowNx).attr('y2', y2)
+            .attr('stroke', 'white').attr('stroke-width', cfg.nowW)
+            .attr('shape-rendering', 'crispEdges').style('mix-blend-mode', 'difference');
+        }
       }
 
       // ---------------------------------------------------------------------------
@@ -679,6 +745,7 @@
           {key: 'notch', label: 'Notch depth', min: 0, max: 80, step: 1},
           {key: 'notchSm', label: 'Minor notch depth', min: 0, max: 40, step: 1},
           {key: 'notchW', label: 'Notch width', min: 1, max: 8, step: 1},
+          {key: 'nowW', label: 'Now-line width', min: 1, max: 8, step: 1},
           {key: 'vExt', label: 'V-line overhang', min: 0, max: 100, step: 1},
           {key: 'labelFs', label: 'Font size', min: 8, max: 60, step: 1},
         ];
@@ -692,6 +759,7 @@
           boxShadow: '0 2px 12px rgba(0,0,0,0.15)', backdropFilter: 'blur(4px)',
         });
 
+        const controls = {};  // key -> {input, val}, so Import can sync the sliders
         SLIDERS.forEach(({key, label, min, max, step}) => {
           const row = document.createElement('div');
           const lbl = Object.assign(document.createElement('label'), {textContent: label});
@@ -710,7 +778,51 @@
           row.appendChild(lbl);
           row.appendChild(input);
           panel.appendChild(row);
+          controls[key] = {input, val};
         });
+
+        // Preview-only "now" scrubber — moves the current-time line so you can see
+        // where it lands (e.g. exactly on an hour, overlapping a notch). Deliberately
+        // separate from the cfg sliders above so it's never exported to config.json.
+        {
+          const fmtTime = h => {
+            const hh = Math.floor(h), mm = Math.round((h - hh) * 60);
+            return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+          };
+          const realNow = new Date();
+          const init = Math.min(22, Math.max(7, realNow.getHours() + realNow.getMinutes() / 60));
+          nowHour = init;   // preview drives "now" from here on; headless render is unaffected
+
+          const row = document.createElement('div');
+          Object.assign(row.style, {marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed #bbb'});
+          const lbl = Object.assign(document.createElement('label'), {textContent: 'Now (preview only)'});
+          const val = Object.assign(document.createElement('span'), {textContent: fmtTime(init)});
+          Object.assign(val.style, {float: 'right', color: '#555', minWidth: '44px', textAlign: 'right'});
+          const input = Object.assign(document.createElement('input'), {
+            type: 'range', min: 7, max: 22, step: 0.25, value: init,
+          });
+          Object.assign(input.style, {width: '100%', margin: '2px 0 6px', display: 'block'});
+          input.addEventListener('input', () => {
+            nowHour = Number(input.value);
+            val.textContent = fmtTime(nowHour);
+            render();
+          });
+          lbl.appendChild(val);
+          row.appendChild(lbl);
+          row.appendChild(input);
+          panel.appendChild(row);
+          render();   // reflect the initial preview time immediately
+        }
+
+        // Reflect the current cfg back onto every slider + readout, then re-render.
+        // Used after an import so the panel matches the loaded values.
+        const syncControls = () => {
+          for (const key in controls) {
+            controls[key].input.value = cfg[key];
+            controls[key].val.textContent = cfg[key];
+          }
+          render();
+        };
 
         // Apply — download the current cfg as config.json. Drop it next to the
         // server (or commit it) and the next render picks up these values.
@@ -735,6 +847,41 @@
           setTimeout(() => {apply.textContent = 'Apply → config.json';}, 1500);
         });
         panel.appendChild(apply);
+
+        // Import — load a config.json back into the panel. Only known keys are
+        // applied, so a stale file with extra/missing keys still works.
+        const importBtn = Object.assign(document.createElement('button'), {textContent: 'Import config.json'});
+        Object.assign(importBtn.style, {
+          width: '100%', marginTop: '6px', padding: '7px', cursor: 'pointer',
+          font: 'inherit', borderRadius: '6px', border: '1px solid #999',
+          background: '#f3f3f3',
+        });
+        const fileInput = Object.assign(document.createElement('input'), {type: 'file', accept: 'application/json,.json'});
+        fileInput.style.display = 'none';
+        importBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+          const file = fileInput.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              const loaded = JSON.parse(reader.result);
+              if (!loaded || typeof loaded !== 'object') throw new Error('not an object');
+              for (const key in loaded) {
+                if (key in cfg && typeof loaded[key] === 'number') cfg[key] = loaded[key];
+              }
+              syncControls();
+              importBtn.textContent = 'Imported ✓';
+            } catch (e) {
+              importBtn.textContent = 'Invalid JSON ✗';
+            }
+            setTimeout(() => {importBtn.textContent = 'Import config.json';}, 1500);
+            fileInput.value = '';  // allow re-importing the same file
+          };
+          reader.readAsText(file);
+        });
+        panel.appendChild(importBtn);
+        panel.appendChild(fileInput);
         panel.appendChild(hint);
 
         document.body.appendChild(panel);
