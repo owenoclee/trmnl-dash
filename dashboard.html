@@ -99,25 +99,15 @@
       display: block;
     }
 
-    /* 46pt at 227ppi */
-    .temp {
-      font-family: 'Inter', system-ui, sans-serif;
-      font-size: 144px;
-      font-weight: 700;
-      line-height: 1;
-      white-space: nowrap;
-      letter-spacing: -3px;
-    }
-
+    /* Conditions — a compact KPI header at the top of the right column: a hero
+       "current temp + condition" line above a divided strip of metric cells.
+       Purely data-driven, with hairlines echoing the charts' grid aesthetic. */
     .conditions {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
       width: 783px;
       /* column width: (1668 content − 102 gutter) / 2 */
       /* shift conditions + charts into the RIGHT column: COL_W (783) + gutter (102) */
       margin-left: 885px;
-      margin-bottom: 44px;
+      margin-bottom: 68px;
     }
 
     /* Charts share the conditions' column — shifted into the right column to match. */
@@ -125,21 +115,68 @@
       margin-left: 885px;
     }
 
-    /* condition + details block, pushed to the right edge of the (right) column */
-    .summary {
-      text-align: right;
+    /* Hero: current temperature + condition, sitting on a shared baseline. */
+    .cond-head {
+      display: flex;
+      align-items: baseline;
+      gap: 24px;
+      margin-bottom: 20px;
     }
 
-    /* 17pt */
-    .condition {
-      font-size: 54px;
-      margin-bottom: 13px;
+    .cond-temp {
+      font-size: 100px;
+      font-weight: 700;
+      line-height: 0.82;
+      letter-spacing: -3px;
     }
 
-    /* 11pt */
-    .details {
-      font-size: 36px;
-      color: #606060;
+    .cond-name {
+      font-size: 40px;
+      font-weight: 500;
+    }
+
+    /* Metric strip — KPI cells split by hairlines, like the chart grid lines. */
+    .metrics {
+      display: flex;
+      border-top: 2px solid black;
+      padding-top: 14px;
+    }
+
+    .metric {
+      flex: 1;
+    }
+
+    .metric+.metric {
+      padding-left: 22px;
+      border-left: 1px solid black;
+    }
+
+    .metric-label {
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #5a5a5a;
+      margin-bottom: 7px;
+    }
+
+    .metric-value {
+      font-size: 48px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    /* Units ride small alongside the value — matching the charts' value+unit labels.
+       'C' sits close to the number; word units (.txt, e.g. mph) get a wider gap. */
+    .unit {
+      font-size: 0.46em;
+      font-weight: 500;
+      margin-left: 0.08em;
+    }
+
+    .unit.txt {
+      margin-left: 0.16em;
     }
 
     /* Photo slot at the bottom of the left column. The image is fetched from the
@@ -180,11 +217,13 @@
       flex-direction: column;
     }
 
+    /* Section header for the calendar — deliberately calmer than the weather
+       temp (the page's hero); the bordered grid below carries the column's weight. */
     .cal-title {
-      font-size: 48px;
-      font-weight: 700;
+      font-size: 54px;
+      font-weight: 600;
       white-space: nowrap;
-      margin-bottom: 28px;
+      margin-bottom: 18px;
     }
 
     .cal-grid {
@@ -230,12 +269,11 @@
   <div class="page">
 
     <div class="conditions">
-      <div class="temp"><span id="w-temp">—</span>°C</div>
-      <div class="summary">
-        <div class="condition" id="w-condition" style="display:none"></div>
-        <div class="details"><span id="w-low">—</span>&deg; to <span id="w-high">—</span>&deg;, <span
-            id="w-wind">—</span> mph wind<span id="w-peakuv"></span></div>
+      <div class="cond-head">
+        <div class="cond-temp" id="w-temp"></div>
+        <div class="cond-name" id="w-condition"></div>
       </div>
+      <div class="metrics" id="w-metrics"></div>
     </div>
 
     <div class="charts"></div>
@@ -271,7 +309,7 @@
       const DATA = (() => {
         try {return JSON.parse(document.getElementById('chart-data').textContent);} catch (e) { }
         return {
-          temp: 11.4, tempMin: 7.8, tempMax: 14.6, windMPH: 17.3, condition: 'Partly cloudy', debug: true,
+          temp: 11.4, feelsLike: 9.4, tempMin: 7.8, tempMax: 14.6, windMPH: 17.3, condition: 'Partly cloudy', debug: true,
           hourlyTemp: [7.2, 7.8, 6.9, 7.1, 7.4, 8.3, 9.1, 10.4, 11.2, 12.7, 13.1, 14.3, 14.6, 14.8, 13.9, 12.4, 11.8, 10.9, 9.7, 9.2, 8.6, 8.1, 7.8, 7.5],
           hourlyWind: [14.2, 13.8, 12.9, 13.7, 15.1, 16.4, 17.8, 19.5, 21.3, 22.7, 21.9, 19.6, 17.3, 16.8, 15.4, 16.2, 17.9, 18.6, 17.4, 15.8, 14.5, 13.7, 12.9, 12.1],
           hourlyPrecip: [0, 0, 0, 0, 0, 0, 0, 5, 12, 22, 31, 43, 52, 46, 33, 21, 14, 9, 4, 0, 0, 0, 0, 0],
@@ -312,7 +350,7 @@
       try {
         const saved = JSON.parse(document.getElementById('chart-config').textContent);
         if (saved && typeof saved === 'object') Object.assign(cfg, saved);
-      } catch (e) { /* opened from disk — keep defaults */ }
+      } catch (e) { /* opened from disk — keep defaults */}
 
       // Preview-only override for "now", as a fractional hour (driven by a slider in
       // the controls panel). Stays null in headless render → real host clock. NOT part
@@ -585,64 +623,43 @@
       }
 
       // ---------------------------------------------------------------------------
-      // Header population
+      // Conditions — a compact KPI header: a hero current-temp + condition line,
+      // then a strip of metric cells (feels-like, high, low, wind). Purely
+      // data-driven to match the charts below; no prose.
       // ---------------------------------------------------------------------------
-      document.getElementById('w-temp').textContent = DATA.temp != null ? Math.round(DATA.temp) : '—';
-      document.getElementById('w-high').textContent = DATA.tempMax != null ? Math.round(DATA.tempMax) : '—';
-      document.getElementById('w-low').textContent = DATA.tempMin != null ? Math.round(DATA.tempMin) : '—';
-      document.getElementById('w-wind').textContent = DATA.windMPH != null ? Math.round(DATA.windMPH) : '—';
+      (function buildConditions() {
+        const round = v => (v != null ? Math.round(v) : null);
+        // value + unit markup: the 'C' rides close to the number (matching the
+        // chart axes, e.g. "15C" — a shrunk ° symbol reads as a stray dot); word
+        // units like mph get a wider gap. Em-relative size, so it scales with the
+        // font it's set in.
+        const vu = (v, unit) => {
+          if (v == null) return '—';
+          if (unit === 'C') return `${v}<span class="unit">C</span>`;
+          return `${v}<span class="unit txt">${unit}</span>`;
+        };
 
-      // Peak UV — the day's max hourly UV and the hour it occurs. Index i = hour i,
-      // so the argmax over the full 24h array gives the peak hour directly. Appended
-      // to the details line; omitted when the day's peak rounds to 0 (no UV worth noting).
-      const uv = DATA.hourlyUV;
-      if (Array.isArray(uv) && uv.length) {
-        let pi = 0;
-        for (let i = 1; i < uv.length; i++) if (uv[i] > uv[pi]) pi = i;
-        if (Math.round(uv[pi]) >= 1) {
-          const {h: ph, ap: pap} = hourParts(pi);
-          document.getElementById('w-peakuv').textContent =
-            `, peak UV ${Math.round(uv[pi])} around ${ph}:00${pap}`;
-        }
-      }
+        document.getElementById('w-temp').innerHTML = vu(round(DATA.temp), 'C');
+        document.getElementById('w-condition').textContent = DATA.condition || '';
 
-      if (DATA.condition) {
-        const el = document.getElementById('w-condition');
-        el.textContent = DATA.condition;
-        el.style.display = '';
-      }
+        const metrics = [
+          {label: 'Feels like', v: round(DATA.feelsLike), unit: 'C'},
+          {label: 'High', v: round(DATA.tempMax), unit: 'C'},
+          {label: 'Low', v: round(DATA.tempMin), unit: 'C'},
+          {label: 'Wind', v: round(DATA.windMPH), unit: 'mph'},
+        ];
+        const wrap = document.getElementById('w-metrics');
+        metrics.forEach(m => {
+          const cell = document.createElement('div');
+          cell.className = 'metric';
+          cell.innerHTML =
+            `<div class="metric-label">${m.label}</div>` +
+            `<div class="metric-value">${vu(m.v, m.unit)}</div>`;
+          wrap.appendChild(cell);
+        });
+      })();
+
       if (DATA.debug) document.body.classList.add('debug');
-
-      // ---------------------------------------------------------------------------
-      // Optical alignment — shift the whole conditions row so the big temperature's
-      // INK (not its line box) sits flush with the top-left of the content area:
-      // corrects the font's left side bearing and the gap above the cap height. The
-      // row is widened by the x shift so the right-aligned summary stays pinned to
-      // the gutter. Measured per render so it tracks the value's leading glyph.
-      // ---------------------------------------------------------------------------
-      function alignTemp() {
-        const conditions = document.querySelector('.conditions');
-        const el = document.querySelector('.temp');
-        const cs = getComputedStyle(el);
-        const ctx = document.createElement('canvas').getContext('2d');
-        ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
-        ctx.textBaseline = 'alphabetic';
-        const m = ctx.measureText(el.textContent);
-
-        // Baseline position within the temp's line box (DOM probe, exact).
-        const probe = document.createElement('span');
-        probe.style.cssText = 'display:inline-block;width:0;height:0';
-        el.appendChild(probe);
-        const baselineFromTop = probe.getBoundingClientRect().top - el.getBoundingClientRect().top;
-        el.removeChild(probe);
-
-        const inkLeft = -m.actualBoundingBoxLeft;                    // box-left → leftmost ink
-        const inkTop = baselineFromTop - m.actualBoundingBoxAscent;  // box-top  → topmost ink
-        conditions.style.width = (COL_W + inkLeft) + 'px';           // widen to offset the left shift
-        conditions.style.transform = `translate(${-inkLeft}px, ${-inkTop}px)`;
-      }
-      if (document.fonts && !document.fonts.check('700 144px Inter')) document.fonts.ready.then(alignTemp);
-      else alignTemp();
 
       render();
 

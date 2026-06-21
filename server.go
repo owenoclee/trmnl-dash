@@ -106,9 +106,10 @@ func saveRegistry() {
 
 type weatherResponse struct {
 	Current struct {
-		Temperature float64 `json:"temperature_2m"`
-		WeatherCode int     `json:"weather_code"`
-		WindSpeed   float64 `json:"wind_speed_10m"`
+		Temperature  float64 `json:"temperature_2m"`
+		WeatherCode  int     `json:"weather_code"`
+		WindSpeed    float64 `json:"wind_speed_10m"`
+		ApparentTemp float64 `json:"apparent_temperature"`
 	} `json:"current"`
 	Hourly struct {
 		Temperature       []float64 `json:"temperature_2m"`
@@ -124,6 +125,7 @@ type weatherResponse struct {
 
 type weatherData struct {
 	Temp         int
+	FeelsLike    int
 	TempMin      int
 	TempMax      int
 	WindMPH      int
@@ -151,7 +153,7 @@ func fetchWeather(lat, lon float64) (*weatherData, error) {
 	url := fmt.Sprintf(
 		"https://api.open-meteo.com/v1/forecast"+
 			"?latitude=%.4f&longitude=%.4f"+
-			"&current=temperature_2m,weather_code,wind_speed_10m"+
+			"&current=temperature_2m,weather_code,wind_speed_10m,apparent_temperature"+
 			"&hourly=temperature_2m,wind_speed_10m,precipitation_probability,uv_index"+
 			"&daily=temperature_2m_max,temperature_2m_min"+
 			"&wind_speed_unit=mph"+
@@ -179,6 +181,7 @@ func fetchWeather(lat, lon float64) (*weatherData, error) {
 
 	wd := &weatherData{
 		Temp:         int(math.Round(wr.Current.Temperature)),
+		FeelsLike:    int(math.Round(wr.Current.ApparentTemp)),
 		WindMPH:      int(math.Round(wr.Current.WindSpeed)),
 		Condition:    wmoCondition(wr.Current.WeatherCode),
 		HourlyTemp:   cap24(wr.Hourly.Temperature),
@@ -242,6 +245,7 @@ func wmoCondition(code int) string {
 // Go's only job: populate this struct and serialise it.
 type dashJSON struct {
 	Temp         int       `json:"temp"`
+	FeelsLike    int       `json:"feelsLike"`
 	TempMin      int       `json:"tempMin"`
 	TempMax      int       `json:"tempMax"`
 	WindMPH      int       `json:"windMPH"`
@@ -269,6 +273,7 @@ type dashboardData struct {
 func buildDashboard(wd *weatherData) dashboardData {
 	d := dashJSON{
 		Temp:         wd.Temp,
+		FeelsLike:    wd.FeelsLike,
 		TempMin:      wd.TempMin,
 		TempMax:      wd.TempMax,
 		WindMPH:      wd.WindMPH,
