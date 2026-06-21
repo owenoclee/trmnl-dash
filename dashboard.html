@@ -114,11 +114,18 @@
       align-items: center;
       justify-content: space-between;
       width: 783px;
-      /* left column: (1668 content − 102 gutter) / 2 */
+      /* column width: (1668 content − 102 gutter) / 2 */
+      /* shift conditions + charts into the RIGHT column: COL_W (783) + gutter (102) */
+      margin-left: 885px;
       margin-bottom: 44px;
     }
 
-    /* condition + details block, pushed to the right edge of the left column */
+    /* Charts share the conditions' column — shifted into the right column to match. */
+    .charts {
+      margin-left: 885px;
+    }
+
+    /* condition + details block, pushed to the right edge of the (right) column */
     .summary {
       text-align: right;
     }
@@ -135,18 +142,18 @@
       color: #606060;
     }
 
-    /* Photo slot at the bottom of the right column. The image is fetched from the
+    /* Photo slot at the bottom of the left column. The image is fetched from the
        server, cover-cropped and dithered on a <canvas> in JS (see DITHER below). */
     .photo {
       position: absolute;
-      left: 987px;
-      /* right column left edge (gutter right) */
+      left: 102px;
+      /* left column left edge (content left) */
       bottom: 91px;
       /* content bottom margin */
       width: 783px;
-      /* right column width */
+      /* left column width */
       height: 380px;
-      /* sits below the calendar in the right column */
+      /* sits below the calendar in the left column */
     }
 
     /* Canvas backing store == on-screen pixels; the dither is computed at this
@@ -158,15 +165,15 @@
       border-radius: 32px;
     }
 
-    /* Calendar — top third of the right column. */
+    /* Calendar — top third of the left column. */
     .calendar {
       position: absolute;
-      left: 987px;
-      /* right column left edge (gutter right) */
+      left: 102px;
+      /* left column left edge (content left) */
       top: 91px;
       /* content top */
       width: 783px;
-      /* right column width */
+      /* left column width */
       height: 400px;
       /* ~1/3 of the 1222px content height */
       display: flex;

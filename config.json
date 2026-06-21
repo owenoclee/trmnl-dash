@@ -1,11 +1,11 @@
 {
   "labelGap": 14,
-  "notch": 14,
-  "notchSm": 7,
-  "notchW": 2,
+  "notch": 9,
+  "notchSm": 4,
+  "notchW": 1,
   "nowW": 2,
   "vExt": 36,
-  "chartH": 136,
+  "chartH": 198,
   "chartGap": 52,
-  "labelFs": 25
+  "labelFs": 26
 }
