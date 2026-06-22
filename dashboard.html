@@ -424,7 +424,7 @@
           {data: sliceDay(DATA.hourlyTemp), unit: 'C', name: 'Temperature'},
           {data: sliceDay(DATA.hourlyUV), unit: '', name: 'UV Index', yMin: 0},
           {data: sliceDay(DATA.hourlyWind), unit: 'mph', name: 'Wind Speed'},
-          {data: sliceDay(DATA.hourlyPrecip), unit: '%', name: 'Precip Chance', yMin: 0, yMax: 100},
+          {data: sliceDay(DATA.hourlyPrecip), unit: '%', name: 'Precipitation', yMin: 0, yMax: 100},
         ];
 
         const chartsH = series.length * chartH + (series.length - 1) * chartGap;
@@ -600,7 +600,7 @@
           svg.append('text')
             .attr('x', chartX0).attr('y', cy - labelFs * 0.4)
             .attr('dominant-baseline', 'auto')
-            .attr('font-size', labelFs * 0.8).attr('font-family', FONT)
+            .attr('font-size', 22).attr('font-family', FONT)
             .attr('fill', 'black')
             .text(name);
         });
