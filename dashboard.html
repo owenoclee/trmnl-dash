@@ -263,6 +263,112 @@
       color: white;
       border-radius: 12px;
     }
+
+    /* Tides — fills the gap between the calendar and the photo in the left
+       column. Title mirrors the calendar's section header above it; the rows
+       borrow the charts'/metric strip's hairline grammar (a 2px rule under the
+       title, 1px between rows). The whole block is display:none'd by JS when the
+       server provides no tide data, so the slot collapses cleanly. */
+    .tides {
+      position: absolute;
+      left: 102px;
+      /* left column left edge (content left) */
+      top: 493px;
+      /* 40px below the calendar (which ends at 453px) */
+      width: 783px;
+      /* left column width */
+      height: 400px;
+      /* ends ~40px above the photo slot (top 933px) */
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Quiet section subheader — deliberately smaller and lighter than the
+       calendar's title above it, so the whole block reads as secondary. */
+    .tide-title {
+      font-size: 32px;
+      font-weight: 500;
+      color: #3a3a3a;
+      white-space: nowrap;
+      margin-bottom: 12px;
+    }
+
+    .tide-list {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Equal-height rows so they spread evenly down the slot; content is
+       vertically centred and columns align (type left, time + height right).
+       Soft gray dividers (not the charts' black hairlines) keep it calm. */
+    .tide-row {
+      flex: 1;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      column-gap: 24px;
+      border-top: 1px solid #cfcfcf;
+    }
+
+    .tide-type {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 19px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: #6a6a6a;
+    }
+
+    .tide-arrow {
+      font-size: 17px;
+      line-height: 1;
+    }
+
+    /* The time is the panel's primary value, but softened (smaller, not bold,
+       near-black rather than black) so it informs without shouting. */
+    .tide-time {
+      text-align: right;
+      font-size: 34px;
+      font-weight: 500;
+      color: #2a2a2a;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    /* Relative-day tag (Tomorrow / weekday) — muted, sits just left of the time;
+       absent for today's tides. */
+    .tide-day {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #8a8a8a;
+      margin-right: 12px;
+    }
+
+    .tide-height {
+      text-align: right;
+      font-size: 22px;
+      font-weight: 400;
+      color: #7a7a7a;
+      white-space: nowrap;
+    }
+
+    /* AM/PM and the 'm' unit ride small, reusing the page's value+unit grammar. */
+    .tide-time .ap {
+      font-size: 0.44em;
+      font-weight: 500;
+      margin-left: 0.14em;
+    }
+
+    .tide-height .unit {
+      font-size: 0.5em;
+      font-weight: 500;
+      margin-left: 0.08em;
+    }
   </style>
 </head>
 
@@ -288,6 +394,11 @@
       <div class="cal-grid" id="cal-grid"></div>
     </div>
 
+    <div class="tides">
+      <div class="tide-title">Tides</div>
+      <div class="tide-list" id="tide-list"></div>
+    </div>
+
   </div>
 
   <!-- D3 — loaded from CDN (works both in headless Chrome render and direct browser preview) -->
@@ -298,6 +409,10 @@
 
   <!-- Photo: Go injects the server-selected image (per --photo-strategy) -->
   <script type="application/json" id="photos-data">{{.PhotosJSON}}</script>
+
+  <!-- Tides: Go injects the next few high/low events ("[]" → panel hidden).
+       Empty/literal when opened directly — the page then shows sample tides. -->
+  <script type="application/json" id="tides-data">{{.TidesJSON}}</script>
 
   <!-- Tunables: Go injects config.json here so a render uses the applied values.
        Empty/literal when opened directly in a browser — the page then falls back
@@ -695,6 +810,78 @@
           el.textContent = d;
           grid.appendChild(el);
         }
+      })();
+
+      // ---------------------------------------------------------------------------
+      // Tides — the next few high/low events for the left-column slot below the
+      // calendar. The server injects an array of {type, time (ISO), height} already
+      // filtered to upcoming events; we format the time against the render-local
+      // clock (12h, matching the chart axis), pick the up/down glyph, and tag any
+      // event that isn't today with a relative-day label. An empty array means the
+      // server has no tide data → hide the whole block. Opened straight from disk
+      // (template not processed) → show sample tides so the panel stays visible.
+      // ---------------------------------------------------------------------------
+      (function buildTides() {
+        const panel = document.querySelector('.tides');
+        const list = document.getElementById('tide-list');
+        if (!panel || !list) return;
+
+        const now = new Date();
+        const sample = (hoursAhead, type, height) => ({
+          type, height,
+          time: new Date(now.getTime() + hoursAhead * 3600000).toISOString(),
+        });
+        const SAMPLE = [
+          sample(1.5, 'high', 5.8), sample(7.7, 'low', 1.1),
+          sample(13.9, 'high', 6.0), sample(20.1, 'low', 0.9),
+        ];
+
+        let tides;
+        try {
+          tides = JSON.parse(document.getElementById('tides-data').textContent);
+          if (!Array.isArray(tides)) tides = [];
+        } catch (e) {
+          tides = SAMPLE;   // opened from disk → no real data, show the sample
+        }
+        if (!tides.length) {
+          panel.style.display = 'none';   // server has no tide data → collapse the slot
+          return;
+        }
+
+        const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        const today0 = startOfDay(now);
+        const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const fmtTime = d => {
+          let h = d.getHours();
+          const ap = h < 12 ? 'AM' : 'PM';
+          h = h % 12 || 12;
+          return {hm: `${h}:${String(d.getMinutes()).padStart(2, '0')}`, ap};
+        };
+        const dayLabel = d => {
+          const diff = Math.round((startOfDay(d) - today0) / 86400000);
+          if (diff <= 0) return '';            // today (or, defensively, earlier)
+          if (diff === 1) return 'Tomorrow';
+          return WD[d.getDay()];
+        };
+
+        list.innerHTML = '';
+        let lastDay = null;   // show the day tag only when the date changes between rows
+        tides.slice(0, 4).forEach(t => {
+          const d = new Date(t.time);
+          const high = String(t.type).toLowerCase() === 'high';
+          const {hm, ap} = fmtTime(d);
+          const dayKey = startOfDay(d).getTime();
+          const day = dayKey === lastDay ? '' : dayLabel(d);
+          lastDay = dayKey;
+          const height = (typeof t.height === 'number') ? t.height.toFixed(1) : null;
+          const row = document.createElement('div');
+          row.className = 'tide-row';
+          row.innerHTML =
+            `<div class="tide-type"><span class="tide-arrow">${high ? '▲' : '▼'}</span>${high ? 'High' : 'Low'}</div>` +
+            `<div class="tide-time">${day ? `<span class="tide-day">${day}</span>` : ''}${hm}<span class="ap">${ap}</span></div>` +
+            (height != null ? `<div class="tide-height">${height}<span class="unit">m</span></div>` : `<div class="tide-height"></div>`);
+          list.appendChild(row);
+        });
       })();
 
       // ---------------------------------------------------------------------------

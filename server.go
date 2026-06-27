@@ -56,6 +56,7 @@ var (
 	renderMu    sync.Mutex
 	devicesPath string
 	configPath  string
+	tidesPath   string
 
 	// photosDir holds the images cycled into the dashboard's bottom-left slot.
 	// renderBaseURL is the loopback URL the headless render uses to fetch them
@@ -292,6 +293,106 @@ func wmoCondition(code int) string {
 	}
 }
 
+// -- tides --
+//
+// High/low tide times are pre-computed offline into a JSON file (see
+// tools/gentides) and read here at render time, mirroring the weather/photo
+// split: Go selects the upcoming events and serialises them, while all
+// formatting and layout live in dashboard.html. The file is optional and
+// gitignored — its absence simply hides the tide panel, so the feature is
+// opt-in per clone: a coastal user generates one for their location, everyone
+// else gets nothing.
+
+// tidesFile is the on-disk schema written by tools/gentides. Times are RFC3339
+// (carry a zone offset, which should be the device's local zone); heights are
+// metres above whatever datum the file was generated against.
+type tidesFile struct {
+	Location string `json:"location"`
+	Tides    []struct {
+		Time   string  `json:"time"`
+		Type   string  `json:"type"`   // "high" | "low"
+		Height float64 `json:"height"` // metres
+	} `json:"tides"`
+}
+
+// tideOut is one upcoming tide as handed to the template. Time stays RFC3339 so
+// the page formats it against the render-local clock (matching the calendar and
+// charts); the page also derives the up/down arrow and a relative-day label
+// from it.
+type tideOut struct {
+	Type   string  `json:"type"`
+	Time   string  `json:"time"`
+	Height float64 `json:"height"`
+}
+
+// maxUpcomingTides caps how many future events we hand the page. The panel
+// renders the first few; the surplus is slack so a tide rolling off the front
+// (it just passed) never momentarily leaves a blank row.
+const maxUpcomingTides = 6
+
+// currentTidesJSON reads the optional tides file and returns the next few
+// events from now as a JSON array for injection. It ALWAYS returns valid JSON —
+// "[]" when there's no file, it's unreadable/invalid, or every event is already
+// past — so the page can tell "server says no tides → hide the panel" apart from
+// the unprocessed "{{.TidesJSON}}" placeholder it sees when dashboard.html is
+// opened straight from disk (which is the only case that shows sample tides).
+// Re-read every render, like config.json, so refreshing the file needs no restart.
+func currentTidesJSON() template.JS {
+	const empty = template.JS("[]")
+	if tidesPath == "" {
+		return empty
+	}
+	raw, err := os.ReadFile(tidesPath)
+	if err != nil {
+		return empty // no file → feature off
+	}
+	var tf tidesFile
+	if err := json.Unmarshal(raw, &tf); err != nil {
+		log.Printf("[tides] ignoring invalid %s: %v", tidesPath, err)
+		return empty
+	}
+
+	// Keep the most-recent tide on screen for an hour past its peak, so the panel
+	// doesn't drop a row the instant a high/low passes.
+	cutoff := time.Now().Add(-1 * time.Hour)
+	type pending struct {
+		ts  time.Time
+		out tideOut
+	}
+	var ps []pending
+	for _, t := range tf.Tides {
+		ts, err := time.Parse(time.RFC3339, t.Time)
+		if err != nil {
+			continue // skip a malformed row rather than failing the whole file
+		}
+		if ts.Before(cutoff) {
+			continue
+		}
+		typ := strings.ToLower(t.Type)
+		if typ != "high" && typ != "low" {
+			continue
+		}
+		ps = append(ps, pending{ts, tideOut{Type: typ, Time: ts.Format(time.RFC3339), Height: t.Height}})
+	}
+	// Sort on the parsed instants: RFC3339 strings sort lexically only within a
+	// single zone offset, but a year of data spans a DST change (+00:00 ↔ +01:00).
+	sort.Slice(ps, func(i, j int) bool { return ps[i].ts.Before(ps[j].ts) })
+
+	if len(ps) == 0 {
+		log.Printf("[tides] %s has no future events; regenerate it (panel hidden)", tidesPath)
+		return empty
+	}
+	if len(ps) > maxUpcomingTides {
+		ps = ps[:maxUpcomingTides]
+	}
+	upcoming := make([]tideOut, len(ps))
+	for i, p := range ps {
+		upcoming[i] = p.out
+	}
+	b, _ := json.Marshal(upcoming)
+	return template.JS(b)
+}
+
 // -- dashboard template data --
 //
 // Go's job: fetch data, serialise to JSON, hand off to the template.
@@ -319,11 +420,14 @@ type dashJSON struct {
 // built-in sample data); PhotosJSON is injected independently so the photo
 // cycling works regardless of whether weather is available. ConfigJSON carries
 // the tunables from config.json so a render uses the values dialled in via the
-// preview panel (empty → the page keeps its built-in cfg defaults).
+// preview panel (empty → the page keeps its built-in cfg defaults). TidesJSON
+// carries the upcoming high/low tides ("[]" → the page hides the tide panel),
+// also independent of weather.
 type dashboardData struct {
 	DataJSON   template.JS
 	PhotosJSON template.JS
 	ConfigJSON template.JS
+	TidesJSON  template.JS
 }
 
 func buildDashboard(wd *weatherData) dashboardData {
@@ -749,6 +853,7 @@ func currentDashboardData(lat, lon float64, location string) dashboardData {
 	}
 	data.PhotosJSON = currentPhotoJSON() // server-selected photo, independent of weather
 	data.ConfigJSON = loadConfigJSON()   // tunables applied via the preview panel
+	data.TidesJSON = currentTidesJSON()  // upcoming tides ("[]" → panel hidden), independent of weather
 	_ = location                   // retained for future footer use
 	return data
 }
@@ -853,6 +958,7 @@ func main() {
 	pngOut      := flag.String("out", "dashboard.png", "PNG output path")
 	dp          := flag.String("devices", "devices.json", "Device registry file")
 	cfgFile     := flag.String("config", "config.json", "Chart tunables file (written by the preview panel's Apply button)")
+	tidesFile   := flag.String("tides", "tides.json", "Pre-computed high/low tides file (see tools/gentides); absent → tide panel hidden")
 	photos      := flag.String("photos", "photos", "Directory of images to cycle through")
 	renderEvery := flag.Int("render-interval", 300, "Seconds between background re-renders (production)")
 	photoStrat  := flag.String("photo-strategy", "shuffle", "Photo cycling: random | shuffle | alphabetical")
@@ -863,6 +969,7 @@ func main() {
 
 	devicesPath = *dp
 	configPath = *cfgFile
+	tidesPath = *tidesFile
 	photosDir = *photos
 	renderBaseURL = loopbackURL(*addr)
 	photoStrategy = *photoStrat
@@ -905,6 +1012,11 @@ func main() {
 		log.Printf("  config file:    %s (applied)", configPath)
 	} else {
 		log.Printf("  config file:    %s (absent; using built-in defaults)", configPath)
+	}
+	if _, err := os.Stat(tidesPath); err == nil {
+		log.Printf("  tides file:     %s (tide panel enabled)", tidesPath)
+	} else {
+		log.Printf("  tides file:     %s (absent; tide panel hidden)", tidesPath)
 	}
 	log.Printf("  devices file:   %s", devicesPath)
 	log.Printf("  devices loaded: %d", len(byMAC))

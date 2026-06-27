@@ -3,6 +3,7 @@ dashboard.png
 server
 trmnl
 devices.json
+tides.json
 .env
 trmnl-*.html
 .DS_Store
