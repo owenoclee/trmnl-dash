@@ -146,10 +146,36 @@ func fetchWeather(lat, lon float64) (*weatherData, error) {
 	weatherMu.Lock()
 	defer weatherMu.Unlock()
 
+	// Fresh cache hit: serve it without touching the network.
 	if weatherCache != nil && time.Since(weatherCache.FetchedAt) < 15*time.Minute {
 		return weatherCache, nil
 	}
 
+	// Cache is cold or past its TTL → try to refresh.
+	wd, err := fetchWeatherUncached(lat, lon)
+	if err != nil {
+		// Stale-while-revalidate: a refresh failure must never blank the display,
+		// so fall back to the last-successful copy however old it is. weatherCache
+		// only ever holds real, successfully-fetched data (the placeholder is never
+		// stored), so this is always genuine weather — just stale. Only when we've
+		// never had a single successful fetch do we surface the error, so the caller
+		// can render obviously-fake placeholder data instead.
+		if weatherCache != nil {
+			log.Printf("[weather] refresh failed (%v); serving cached data from %s ago",
+				err, time.Since(weatherCache.FetchedAt).Round(time.Minute))
+			return weatherCache, nil
+		}
+		return nil, err
+	}
+
+	weatherCache = wd
+	return wd, nil
+}
+
+// fetchWeatherUncached performs the Open-Meteo request and parses the response
+// into a weatherData. It never reads or writes weatherCache — caching and the
+// stale-fallback policy are fetchWeather's responsibility.
+func fetchWeatherUncached(lat, lon float64) (*weatherData, error) {
 	url := fmt.Sprintf(
 		"https://api.open-meteo.com/v1/forecast"+
 			"?latitude=%.4f&longitude=%.4f"+
@@ -199,8 +225,38 @@ func fetchWeather(lat, lon float64) (*weatherData, error) {
 
 	log.Printf("[weather] %d°C, %s, wind %d mph (high %d° low %d°)",
 		wd.Temp, wd.Condition, wd.WindMPH, wd.TempMax, wd.TempMin)
-	weatherCache = wd
 	return wd, nil
+}
+
+// synthWeather returns obviously-fake placeholder weather, used only when a
+// fetch fails AND there's no cached copy to fall back on (e.g. the first render
+// after a cold start while Open-Meteo is unreachable). Every hourly series is a
+// hard 0↔100 sawtooth so the charts render as unmistakable jagged spikes, and
+// the KPI scalars are nonsensical — the display must read as "broken" and never
+// be confused for real conditions.
+func synthWeather() *weatherData {
+	sawtooth := func() []float64 {
+		s := make([]float64, 24)
+		for i := range s {
+			if i%2 == 1 {
+				s[i] = 100
+			}
+		}
+		return s
+	}
+	return &weatherData{
+		Temp:         0,
+		FeelsLike:    100,
+		TempMin:      0,
+		TempMax:      100,
+		WindMPH:      100,
+		Condition:    "No weather data",
+		HourlyTemp:   sawtooth(),
+		HourlyWind:   sawtooth(),
+		HourlyPrecip: sawtooth(),
+		HourlyUV:     sawtooth(),
+		FetchedAt:    time.Now(),
+	}
 }
 
 func wmoCondition(code int) string {
@@ -681,10 +737,15 @@ func currentDashboardData(lat, lon float64, location string) dashboardData {
 	if !math.IsNaN(lat) && !math.IsNaN(lon) {
 		wd, err := fetchWeather(lat, lon)
 		if err != nil {
-			log.Printf("[weather] unavailable: %v", err)
-		} else {
-			data = buildDashboard(wd)
+			// Fetch failed and there's no cached copy to fall back on (cold start +
+			// upstream down). Render obviously-fake placeholder data rather than an
+			// empty blob: an empty DataJSON makes the page fall back to its built-in
+			// sample data, which carries debug:true and trips the margin/config-box
+			// debug overlay.
+			log.Printf("[weather] no data available (%v); rendering placeholder", err)
+			wd = synthWeather()
 		}
+		data = buildDashboard(wd)
 	}
 	data.PhotosJSON = currentPhotoJSON() // server-selected photo, independent of weather
 	data.ConfigJSON = loadConfigJSON()   // tunables applied via the preview panel
