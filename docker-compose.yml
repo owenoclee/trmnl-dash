@@ -11,7 +11,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Render the calendar/clock in your local time, not UTC.
+      # Render the date and day labels in your local time, not UTC.
       TZ: Europe/London
       # Weather (Open-Meteo). Leave unset to disable the weather widget.
       TRMNL_LAT: "51.5074"
@@ -21,6 +21,8 @@ services:
       TRMNL_REFRESH_RATE: "1800"     # seconds the device sleeps between polls
       TRMNL_RENDER_INTERVAL: "300"   # seconds between server-side re-renders
       TRMNL_PHOTO_STRATEGY: shuffle  # random | shuffle | alphabetical
+      # Left column charts (screen time, CO₂, mobile data). Unset → empty charts.
+      # TRMNL_PROMETHEUS_URL: http://prometheus:9090
     volumes:
       # Your image library — point the left side at any local dir. Read-only:
       # the server only reads photos, never writes them.
@@ -28,9 +30,6 @@ services:
       # Persists the device's adopted API token across restarts. Without this,
       # the device re-adopts on the next poll (harmless) but the registry resets.
       - trmnl-data:/data
-      # Optional tide panel: bake a tides.json (see README → "Tide times") and
-      # mount it here. Absent → the panel is hidden.
-      # - ./tides.json:/data/tides.json:ro
 
 volumes:
   trmnl-data:

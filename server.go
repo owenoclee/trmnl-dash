@@ -56,7 +56,6 @@ var (
 	renderMu    sync.Mutex
 	devicesPath string
 	configPath  string
-	tidesPath   string
 
 	// photosDir holds the images cycled into the dashboard's bottom-left slot.
 	// renderBaseURL is the loopback URL the headless render uses to fetch them
@@ -293,103 +292,211 @@ func wmoCondition(code int) string {
 	}
 }
 
-// -- tides --
+// -- personal stats (Prometheus) --
 //
-// High/low tide times are pre-computed offline into a JSON file (see
-// tools/gentides) and read here at render time, mirroring the weather/photo
-// split: Go selects the upcoming events and serialises them, while all
-// formatting and layout live in dashboard.html. The file is optional and
-// gitignored — its absence simply hides the tide panel, so the feature is
-// opt-in per clone: a coastal user generates one for their location, everyone
-// else gets nothing.
+// The left column charts the last seven days of personal metrics that already
+// live in the cluster's Prometheus: iPhone screen time, indoor CO₂ and the
+// mobile data allowance. Go runs the queries and hands the raw points over;
+// all bucketing into day slots, scaling and drawing happen in dashboard.html,
+// mirroring the weather split. Unconfigured or unreachable → "null", and the
+// page draws empty frames rather than sample data.
 
-// tidesFile is the on-disk schema written by tools/gentides. Times are RFC3339
-// (carry a zone offset, which should be the device's local zone); heights are
-// metres above whatever datum the file was generated against.
-type tidesFile struct {
-	Location string `json:"location"`
-	Tides    []struct {
-		Time   string  `json:"time"`
-		Type   string  `json:"type"`   // "high" | "low"
-		Height float64 `json:"height"` // metres
-	} `json:"tides"`
+const (
+	statsDays = 7                // day slots on the left column's x-axis, ending today
+	statsStep = 30 * time.Minute // resolution of the CO₂ and data-remaining curves
+)
+
+// statsJSON is the data contract for the left column. Point series are
+// [unix seconds, value] pairs; a missing point is a gap in the data. Instants
+// are pointers so "no data" serialises as null rather than a fabricated zero.
+type statsJSON struct {
+	WindowStart int64        `json:"windowStart"` // local midnight, statsDays-1 days ago
+	Step        int          `json:"step"`        // seconds between CO₂ / data points
+	ScreenHours []*float64   `json:"screenHours"` // per local day, oldest first; today in progress
+	CO2         [][2]float64 `json:"co2"`
+	CO2Now      *float64     `json:"co2Now"`
+	DataGB      [][2]float64 `json:"dataGB"`
+	DataNowGB   *float64     `json:"dataNowGB"`
+	AllowanceGB *float64     `json:"allowanceGB"`
+	BoostStart  *float64     `json:"boostStart"` // unix seconds
+	BoostEnd    *float64     `json:"boostEnd"`   // unix seconds; the next refresh
+	FetchedAt   time.Time    `json:"-"`
 }
 
-// tideOut is one upcoming tide as handed to the template. Time stays RFC3339 so
-// the page formats it against the render-local clock (matching the calendar and
-// charts); the page also derives the up/down arrow and a relative-day label
-// from it.
-type tideOut struct {
-	Type   string  `json:"type"`
-	Time   string  `json:"time"`
-	Height float64 `json:"height"`
-}
+var (
+	promURL    string
+	promClient = &http.Client{Timeout: 10 * time.Second}
+	statsMu    sync.Mutex
+	statsCache *statsJSON
+)
 
-// maxUpcomingTides caps how many future events we hand the page. The panel
-// renders the first few; the surplus is slack so a tide rolling off the front
-// (it just passed) never momentarily leaves a blank row.
-const maxUpcomingTides = 6
-
-// currentTidesJSON reads the optional tides file and returns the next few
-// events from now as a JSON array for injection. It ALWAYS returns valid JSON —
-// "[]" when there's no file, it's unreadable/invalid, or every event is already
-// past — so the page can tell "server says no tides → hide the panel" apart from
-// the unprocessed "{{.TidesJSON}}" placeholder it sees when dashboard.html is
-// opened straight from disk (which is the only case that shows sample tides).
-// Re-read every render, like config.json, so refreshing the file needs no restart.
-func currentTidesJSON() template.JS {
-	const empty = template.JS("[]")
-	if tidesPath == "" {
-		return empty
+// promQuery runs a PromQL query against the Prometheus HTTP API. With a zero
+// step it's an instant query; otherwise a range query over [start, end]. Each
+// query is wrapped by the caller in an aggregation, so only the first series of
+// the result is read.
+func promQuery(q string, start, end time.Time, step time.Duration) ([][2]float64, error) {
+	v := url.Values{"query": {q}}
+	endpoint := "/api/v1/query"
+	if step > 0 {
+		endpoint = "/api/v1/query_range"
+		v.Set("start", strconv.FormatInt(start.Unix(), 10))
+		v.Set("end", strconv.FormatInt(end.Unix(), 10))
+		v.Set("step", strconv.Itoa(int(step.Seconds())))
 	}
-	raw, err := os.ReadFile(tidesPath)
+	resp, err := promClient.Get(promURL + endpoint + "?" + v.Encode())
 	if err != nil {
-		return empty // no file → feature off
+		return nil, err
 	}
-	var tf tidesFile
-	if err := json.Unmarshal(raw, &tf); err != nil {
-		log.Printf("[tides] ignoring invalid %s: %v", tidesPath, err)
-		return empty
+	defer resp.Body.Close()
+	var body struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+		Data   struct {
+			Result []struct {
+				Value  [2]any   `json:"value"`
+				Values [][2]any `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	if body.Status != "success" {
+		return nil, fmt.Errorf("%s: %s", q, body.Error)
+	}
+	if len(body.Data.Result) == 0 {
+		return nil, nil // no data is not an error: the exporter may just be down
+	}
+	r := body.Data.Result[0]
+	raw := r.Values
+	if step == 0 {
+		raw = [][2]any{r.Value}
+	}
+	out := make([][2]float64, 0, len(raw))
+	for _, p := range raw {
+		ts, _ := p[0].(float64)
+		s, _ := p[1].(string)
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			continue
+		}
+		out = append(out, [2]float64{ts, f})
+	}
+	return out, nil
+}
+
+// promInstant returns the value of an instant query, or nil when it has no data.
+func promInstant(q string) (*float64, error) {
+	pts, err := promQuery(q, time.Time{}, time.Time{}, 0)
+	if err != nil || len(pts) == 0 {
+		return nil, err
+	}
+	return &pts[0][1], nil
+}
+
+// fetchStats returns the left column's data, refreshing it on every call (the
+// render loop already paces calls to once per render interval). Like the
+// weather, a failed refresh falls back to the last good copy however old it is;
+// only with no copy at all does it return nil.
+func fetchStats() *statsJSON {
+	if promURL == "" {
+		return nil
+	}
+	statsMu.Lock()
+	defer statsMu.Unlock()
+	st, err := fetchStatsUncached()
+	if err != nil {
+		if statsCache != nil {
+			log.Printf("[stats] refresh failed (%v); serving cached data from %s ago",
+				err, time.Since(statsCache.FetchedAt).Round(time.Minute))
+			return statsCache
+		}
+		log.Printf("[stats] no data available: %v", err)
+		return nil
+	}
+	statsCache = st
+	return st
+}
+
+func fetchStatsUncached() (*statsJSON, error) {
+	now := time.Now()
+	y, m, d := now.Date()
+	winStart := time.Date(y, m, d-(statsDays-1), 0, 0, 0, 0, time.Local)
+	st := &statsJSON{WindowStart: winStart.Unix(), Step: int(statsStep.Seconds()), FetchedAt: now}
+
+	// Screen time: hourly sums, bucketed into local days here rather than with a
+	// [1d] range, so today's bar runs from midnight and DST days stay whole. A
+	// sample at T covers (T-1h, T], so it belongs to the day containing T-1h.
+	hourly, err := promQuery(
+		`sum(sum_over_time(screentime_device_foreground_seconds{device="iphone"}[1h])) / 3600`,
+		winStart.Add(time.Hour), now.Truncate(time.Hour).Add(time.Hour), time.Hour)
+	if err != nil {
+		return nil, fmt.Errorf("screen time: %w", err)
+	}
+	st.ScreenHours = make([]*float64, statsDays)
+	for _, p := range hourly {
+		t := time.Unix(int64(p[0]), 0).Add(-time.Hour)
+		ty, tm, td := t.Date()
+		day := int(time.Date(ty, tm, td, 12, 0, 0, 0, time.Local).Sub(winStart).Hours() / 24)
+		if day < 0 || day >= statsDays {
+			continue
+		}
+		if st.ScreenHours[day] == nil {
+			st.ScreenHours[day] = new(float64)
+		}
+		*st.ScreenHours[day] += p[1]
 	}
 
-	// Keep the most-recent tide on screen for an hour past its peak, so the panel
-	// doesn't drop a row the instant a high/low passes.
-	cutoff := time.Now().Add(-1 * time.Hour)
-	type pending struct {
-		ts  time.Time
-		out tideOut
+	ranges := []struct {
+		q   string
+		dst *[][2]float64
+	}{
+		{`avg(avg_over_time(inkbird_iam_t1_co2_ppm[30m]))`, &st.CO2},
+		{`max(last_over_time(onepmobile_data_remaining_bytes[30m])) / 2^30`, &st.DataGB},
 	}
-	var ps []pending
-	for _, t := range tf.Tides {
-		ts, err := time.Parse(time.RFC3339, t.Time)
+	for _, r := range ranges {
+		pts, err := promQuery(r.q, winStart.Add(statsStep), now, statsStep)
 		if err != nil {
-			continue // skip a malformed row rather than failing the whole file
+			return nil, err
 		}
-		if ts.Before(cutoff) {
-			continue
-		}
-		typ := strings.ToLower(t.Type)
-		if typ != "high" && typ != "low" {
-			continue
-		}
-		ps = append(ps, pending{ts, tideOut{Type: typ, Time: ts.Format(time.RFC3339), Height: t.Height}})
+		*r.dst = pts
 	}
-	// Sort on the parsed instants: RFC3339 strings sort lexically only within a
-	// single zone offset, but a year of data spans a DST change (+00:00 ↔ +01:00).
-	sort.Slice(ps, func(i, j int) bool { return ps[i].ts.Before(ps[j].ts) })
 
-	if len(ps) == 0 {
-		log.Printf("[tides] %s has no future events; regenerate it (panel hidden)", tidesPath)
-		return empty
+	instants := []struct {
+		q   string
+		dst **float64
+	}{
+		{`max(last_over_time(inkbird_iam_t1_co2_ppm[15m]))`, &st.CO2Now},
+		{`max(last_over_time(onepmobile_data_remaining_bytes[1h])) / 2^30`, &st.DataNowGB},
+		{`max(last_over_time(onepmobile_data_allowance_bytes[1h])) / 2^30`, &st.AllowanceGB},
+		{`max(last_over_time(onepmobile_boost_period_start_timestamp_seconds[1h]))`, &st.BoostStart},
+		{`max(last_over_time(onepmobile_boost_next_refresh_timestamp_seconds[1h]))`, &st.BoostEnd},
 	}
-	if len(ps) > maxUpcomingTides {
-		ps = ps[:maxUpcomingTides]
+	for _, in := range instants {
+		v, err := promInstant(in.q)
+		if err != nil {
+			return nil, err
+		}
+		*in.dst = v
 	}
-	upcoming := make([]tideOut, len(ps))
-	for i, p := range ps {
-		upcoming[i] = p.out
+
+	var today float64
+	if h := st.ScreenHours[statsDays-1]; h != nil {
+		today = *h
 	}
-	b, _ := json.Marshal(upcoming)
+	log.Printf("[stats] screen today %.1fh, %d CO₂ points, %d data points", today, len(st.CO2), len(st.DataGB))
+	return st, nil
+}
+
+// currentStatsJSON serialises the left column's data for injection. Always
+// valid JSON ("null" when there's none), so the page can tell "server has no
+// data" apart from the raw placeholder it sees when opened from disk.
+func currentStatsJSON() template.JS {
+	st := fetchStats()
+	if st == nil {
+		return "null"
+	}
+	b, _ := json.Marshal(st)
 	return template.JS(b)
 }
 
@@ -420,14 +527,14 @@ type dashJSON struct {
 // built-in sample data); PhotosJSON is injected independently so the photo
 // cycling works regardless of whether weather is available. ConfigJSON carries
 // the tunables from config.json so a render uses the values dialled in via the
-// preview panel (empty → the page keeps its built-in cfg defaults). TidesJSON
-// carries the upcoming high/low tides ("[]" → the page hides the tide panel),
-// also independent of weather.
+// preview panel (empty → the page keeps its built-in cfg defaults). StatsJSON
+// carries the left column's Prometheus data ("null" → empty charts), also
+// independent of weather.
 type dashboardData struct {
 	DataJSON   template.JS
 	PhotosJSON template.JS
 	ConfigJSON template.JS
-	TidesJSON  template.JS
+	StatsJSON  template.JS
 }
 
 func buildDashboard(wd *weatherData) dashboardData {
@@ -853,8 +960,8 @@ func currentDashboardData(lat, lon float64, location string) dashboardData {
 	}
 	data.PhotosJSON = currentPhotoJSON() // server-selected photo, independent of weather
 	data.ConfigJSON = loadConfigJSON()   // tunables applied via the preview panel
-	data.TidesJSON = currentTidesJSON()  // upcoming tides ("[]" → panel hidden), independent of weather
-	_ = location                   // retained for future footer use
+	data.StatsJSON = currentStatsJSON()  // Prometheus data for the left column, independent of weather
+	_ = location                         // retained for future footer use
 	return data
 }
 
@@ -958,7 +1065,7 @@ func main() {
 	pngOut      := flag.String("out", "dashboard.png", "PNG output path")
 	dp          := flag.String("devices", "devices.json", "Device registry file")
 	cfgFile     := flag.String("config", "config.json", "Chart tunables file (written by the preview panel's Apply button)")
-	tidesFile   := flag.String("tides", "tides.json", "Pre-computed high/low tides file (see tools/gentides); absent → tide panel hidden")
+	prom        := flag.String("prometheus", os.Getenv("TRMNL_PROMETHEUS_URL"), "Prometheus base URL for the left column's charts (or set TRMNL_PROMETHEUS_URL); empty → empty charts")
 	photos      := flag.String("photos", "photos", "Directory of images to cycle through")
 	renderEvery := flag.Int("render-interval", 300, "Seconds between background re-renders (production)")
 	photoStrat  := flag.String("photo-strategy", "shuffle", "Photo cycling: random | shuffle | alphabetical")
@@ -969,7 +1076,7 @@ func main() {
 
 	devicesPath = *dp
 	configPath = *cfgFile
-	tidesPath = *tidesFile
+	promURL = strings.TrimRight(*prom, "/")
 	photosDir = *photos
 	renderBaseURL = loopbackURL(*addr)
 	photoStrategy = *photoStrat
@@ -1013,10 +1120,10 @@ func main() {
 	} else {
 		log.Printf("  config file:    %s (absent; using built-in defaults)", configPath)
 	}
-	if _, err := os.Stat(tidesPath); err == nil {
-		log.Printf("  tides file:     %s (tide panel enabled)", tidesPath)
+	if promURL != "" {
+		log.Printf("  prometheus:     %s", promURL)
 	} else {
-		log.Printf("  tides file:     %s (absent; tide panel hidden)", tidesPath)
+		log.Printf("  prometheus:     not configured (left column charts empty)")
 	}
 	log.Printf("  devices file:   %s", devicesPath)
 	log.Printf("  devices loaded: %d", len(byMAC))

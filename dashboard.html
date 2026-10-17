@@ -99,20 +99,29 @@
       display: block;
     }
 
-    /* Conditions — a compact KPI header at the top of the right column: a hero
-       "current temp + condition" line above a divided strip of metric cells.
-       Purely data-driven, with hairlines echoing the charts' grid aesthetic. */
-    .conditions {
-      width: 783px;
-      /* column width: (1668 content − 102 gutter) / 2 */
-      /* shift conditions + charts into the RIGHT column: COL_W (783) + gutter (102) */
-      margin-left: 885px;
+    /* Header — one grid across both columns (783px each, split by the 102px
+       gutter): a hero line above a divided strip of metric cells on each side.
+       Left is the date over personal stats, right the current weather over its
+       conditions. A shared grid row puts the date and the temperature on one
+       baseline and both metric strips at one height. Purely data-driven, with
+       hairlines echoing the charts' grid aesthetic. */
+    .top {
+      display: grid;
+      grid-template-columns: 783px 783px;
+      column-gap: 102px;
+      align-items: baseline;
       margin-bottom: 68px;
     }
 
-    /* Charts share the conditions' column — shifted into the right column to match. */
+    /* Charts sit in the same two columns below the header. */
+    .cols {
+      display: flex;
+      gap: 102px;
+    }
+
+    .week-charts,
     .charts {
-      margin-left: 885px;
+      width: 783px;
     }
 
     /* Hero: current temperature + condition, sitting on a shared baseline. */
@@ -121,6 +130,16 @@
       align-items: baseline;
       gap: 24px;
       margin-bottom: 20px;
+    }
+
+    /* The date — deliberately calmer than the weather temp (the page's hero). */
+    /* No bottom margin and a tight line box: the weather hero's margin sets the
+       row's depth, so the date can't push both metric strips down. */
+    .date-title {
+      font-size: 54px;
+      font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
     }
 
     .cond-temp {
@@ -157,6 +176,7 @@
       letter-spacing: 2px;
       text-transform: uppercase;
       color: #5a5a5a;
+      white-space: nowrap;
       margin-bottom: 7px;
     }
 
@@ -190,7 +210,7 @@
       width: 783px;
       /* left column width */
       height: 380px;
-      /* sits below the calendar in the left column */
+      /* sits below the week charts in the left column */
     }
 
     /* Canvas backing store == on-screen pixels; the dither is computed at this
@@ -202,201 +222,29 @@
       border-radius: 32px;
     }
 
-    /* Calendar — top third of the left column. */
-    .calendar {
-      position: absolute;
-      left: 102px;
-      /* left column left edge (content left) */
-      top: 91px;
-      /* content top */
-      width: 783px;
-      /* left column width */
-      height: 362px;
-      /* ~1/3 of the 1222px content height */
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* Section header for the calendar — deliberately calmer than the weather
-       temp (the page's hero); the bordered grid below carries the column's weight. */
-    .cal-title {
-      font-size: 54px;
-      font-weight: 600;
-      white-space: nowrap;
-      margin-top: 25px;
-      margin-bottom: 16px;
-    }
-
-    .cal-grid {
-      flex: 1;
-      display: grid;
-      grid-template-columns: repeat(7, 1fr);
-      grid-auto-rows: 1fr;
-      gap: 6px;
-      padding: 6px;
-      /* == gap, so the border sits one cell-gap from the cells */
-      border: 2px solid black;
-      border-radius: 16px;
-    }
-
-    .cal-head,
-    .cal-day {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .cal-head {
-      font-size: 28px;
-      font-weight: 600;
-      color: #606060;
-      /* muted weekday letters */
-    }
-
-    .cal-day {
-      font-size: 30px;
-    }
-
-    /* Today: filled black cell with white number. */
-    .cal-today {
-      background: black;
-      color: white;
-      border-radius: 12px;
-    }
-
-    /* Tides — fills the gap between the calendar and the photo in the left
-       column. Title mirrors the calendar's section header above it; the rows
-       borrow the charts'/metric strip's hairline grammar (a 2px rule under the
-       title, 1px between rows). The whole block is display:none'd by JS when the
-       server provides no tide data, so the slot collapses cleanly. */
-    .tides {
-      position: absolute;
-      left: 102px;
-      /* left column left edge (content left) */
-      top: 493px;
-      /* 40px below the calendar (which ends at 453px) */
-      width: 783px;
-      /* left column width */
-      height: 400px;
-      /* ends ~40px above the photo slot (top 933px) */
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* Quiet section subheader — deliberately smaller and lighter than the
-       calendar's title above it, so the whole block reads as secondary. */
-    .tide-title {
-      font-size: 32px;
-      font-weight: 500;
-      color: #3a3a3a;
-      white-space: nowrap;
-      margin-bottom: 12px;
-    }
-
-    .tide-list {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* Equal-height rows so they spread evenly down the slot; content is
-       vertically centred and columns align (type left, time + height right).
-       Soft gray dividers (not the charts' black hairlines) keep it calm. */
-    .tide-row {
-      flex: 1;
-      display: grid;
-      grid-template-columns: auto 1fr auto;
-      align-items: center;
-      column-gap: 24px;
-      border-top: 1px solid #cfcfcf;
-    }
-
-    .tide-type {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      font-size: 19px;
-      font-weight: 600;
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
-      color: #6a6a6a;
-    }
-
-    .tide-arrow {
-      font-size: 17px;
-      line-height: 1;
-    }
-
-    /* The time is the panel's primary value, but softened (smaller, not bold,
-       near-black rather than black) so it informs without shouting. */
-    .tide-time {
-      text-align: right;
-      font-size: 34px;
-      font-weight: 500;
-      color: #2a2a2a;
-      line-height: 1;
-      white-space: nowrap;
-    }
-
-    /* Relative-day tag (Tomorrow / weekday) — muted, sits just left of the time;
-       absent for today's tides. */
-    .tide-day {
-      font-size: 16px;
-      font-weight: 600;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: #8a8a8a;
-      margin-right: 12px;
-    }
-
-    .tide-height {
-      text-align: right;
-      font-size: 22px;
-      font-weight: 400;
-      color: #7a7a7a;
-      white-space: nowrap;
-    }
-
-    /* AM/PM and the 'm' unit ride small, reusing the page's value+unit grammar. */
-    .tide-time .ap {
-      font-size: 0.44em;
-      font-weight: 500;
-      margin-left: 0.14em;
-    }
-
-    .tide-height .unit {
-      font-size: 0.5em;
-      font-weight: 500;
-      margin-left: 0.08em;
-    }
   </style>
 </head>
 
 <body>
   <div class="page">
 
-    <div class="conditions">
+    <div class="top">
+      <div class="date-title" id="date-title"></div>
       <div class="cond-head">
         <div class="cond-temp" id="w-temp"></div>
         <div class="cond-name" id="w-condition"></div>
       </div>
+      <div class="metrics" id="s-metrics"></div>
       <div class="metrics" id="w-metrics"></div>
     </div>
 
-    <div class="charts"></div>
+    <div class="cols">
+      <div class="week-charts"></div>
+      <div class="charts"></div>
+    </div>
 
     <div class="photo">
       <canvas id="photo-canvas"></canvas>
-    </div>
-
-    <div class="calendar">
-      <div class="cal-title" id="cal-title"></div>
-      <div class="cal-grid" id="cal-grid"></div>
-    </div>
-
-    <div class="tides">
-      <div class="tide-title">Tides</div>
-      <div class="tide-list" id="tide-list"></div>
     </div>
 
   </div>
@@ -410,9 +258,9 @@
   <!-- Photo: Go injects the server-selected image (per --photo-strategy) -->
   <script type="application/json" id="photos-data">{{.PhotosJSON}}</script>
 
-  <!-- Tides: Go injects the next few high/low events ("[]" → panel hidden).
-       Empty/literal when opened directly — the page then shows sample tides. -->
-  <script type="application/json" id="tides-data">{{.TidesJSON}}</script>
+  <!-- Personal stats: Go injects the last week from Prometheus ("null" → empty
+       charts). Literal when opened directly — the page then shows a sample week. -->
+  <script type="application/json" id="stats-data">{{.StatsJSON}}</script>
 
   <!-- Tunables: Go injects config.json here so a render uses the applied values.
        Empty/literal when opened directly in a browser — the page then falls back
@@ -433,6 +281,26 @@
         };
       })();
 
+      // Personal stats for the left column: the last N_WEEK local days from
+      // Prometheus. null → the server has none (charts draw empty). Opened from
+      // disk → a generated sample week.
+      const STATS = (() => {
+        try {return JSON.parse(document.getElementById('stats-data').textContent);} catch (e) { }
+        const d = new Date();
+        const start = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 6) / 1000;
+        const co2 = [], dataGB = [];
+        for (let t = start + 1800; t <= Date.now() / 1000; t += 1800) {
+          const h = new Date(t * 1000).getHours();
+          co2.push([t, 520 + 420 * Math.max(0, Math.cos((h - 5) / 24 * 2 * Math.PI)) + 40 * Math.sin(t / 5000)]);
+          dataGB.push([t, 44 - (t - start) / 86400 * 1.4]);
+        }
+        return {
+          windowStart: start, step: 1800, screenHours: [3.2, 1.4, 4.6, 2.1, 0.8, 3.7, 1.9],
+          co2, co2Now: 640, dataGB, dataNowGB: 35.2, allowanceGB: 50,
+          boostStart: start - 86400 * 20, boostEnd: start + 86400 * 16,
+        };
+      })();
+
       // ---------------------------------------------------------------------------
       // Fixed constants
       // ---------------------------------------------------------------------------
@@ -442,6 +310,9 @@
       const N_DAY = 16;
       const START_HOUR = 7;                     // first hour on the x-axis (index 0); window is START_HOUR … START_HOUR+N_DAY-1
       const GRID_SW = 1;
+      const N_WEEK = 7;                         // day slots in the left column's charts, ending today
+      const SCREEN_GOAL_H = 1;                  // daily screen-time goal to beat (hours)
+      const PHOTO_GAP = 40;                     // space kept between the week charts' labels and the photo
       const FONT = "'Inter', system-ui, sans-serif";
 
       // ---------------------------------------------------------------------------
@@ -547,7 +418,7 @@
 
         d3.select('.charts').selectAll('*').remove();
         const svg = d3.select('.charts').append('svg')
-          .attr('width', CONTENT_W).attr('height', svgH)
+          .attr('width', COL_W).attr('height', svgH)
           .style('display', 'block').style('overflow', 'visible');
 
         // Data ranges — independent of chart width, but needed to size the value labels.
@@ -739,6 +610,226 @@
       }
 
       // ---------------------------------------------------------------------------
+      // Week charts — the left column: screen time per day (bars, with the goal as
+      // a dotted line), CO₂ and data remaining, over the last N_WEEK local days with
+      // today on the right. The same grammar as the weather charts (solid top and
+      // bottom rules, blend-mode notches, value+unit labels flush to the column's
+      // right edge), but the notches mark midnights and the axis names the days
+      // between them. The three charts share the space between the header and the
+      // photo.
+      // ---------------------------------------------------------------------------
+      function renderWeek() {
+        const {labelGap, notch, notchSm, notchW, vExt, chartGap, labelFs} = cfg;
+        const host = d3.select('.week-charts');
+        host.selectAll('*').remove();
+
+        const W = STATS || {};
+        const today0 = (() => {const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate());})();
+        const day0 = W.windowStart ? new Date(W.windowStart * 1000)
+          : new Date(today0.getFullYear(), today0.getMonth(), today0.getDate() - (N_WEEK - 1));
+        // Real local midnights, so a DST week still splits on the right hours.
+        const mids = d3.range(N_WEEK + 1).map(i =>
+          new Date(day0.getFullYear(), day0.getMonth(), day0.getDate() + i) / 1000);
+
+        // Break a curve wherever points are missing, so a gap in the data reads as
+        // a gap rather than a straight line bridging it.
+        const step = W.step || 1800;
+        const withGaps = pts => (pts || []).flatMap((p, i, a) =>
+          i && p[0] - a[i - 1][0] > step * 1.5 ? [[a[i - 1][0] + step, null], p] : [p]);
+
+        const screen = d3.range(N_WEEK).map(i => (W.screenHours || [])[i] ?? null);
+        const co2 = withGaps(W.co2), dataGB = withGaps(W.dataGB);
+        const co2Max = d3.max(co2, p => p[1]) ?? 0;
+        const dataMax = d3.max(dataGB, p => p[1]) ?? 0;
+        const allowance = W.allowanceGB ?? (Math.ceil(dataMax / 10) * 10 || 50);
+
+        // Even-burn budget for the data allowance: full at the boost's start, empty
+        // at its refresh. Staying above it means the allowance lasts.
+        let budget = null;
+        if (W.allowanceGB && W.boostStart && W.boostEnd > W.boostStart) {
+          const at = t => W.allowanceGB * (W.boostEnd - t) / (W.boostEnd - W.boostStart);
+          const a = Math.max(mids[0], W.boostStart), b = Math.min(mids[N_WEEK], W.boostEnd);
+          if (b > a) budget = [[a, at(a)], [b, at(b)]];
+        }
+
+        // Space: from the top of this column down to PHOTO_GAP above the photo,
+        // less the day labels under the last chart. Bars take the largest share.
+        const avail = document.querySelector('.photo').offsetTop - PHOTO_GAP - host.node().offsetTop;
+        const stackH = avail - (vExt + labelFs + 4);
+        const barH = Math.round((stackH - 2 * chartGap) * 0.44);
+        const lineH = Math.round((stackH - 2 * chartGap - barH) / 2);
+
+        const charts = [
+          {
+            kind: 'bars', name: 'Screen Time', unit: 'h', h: barH, data: screen,
+            dMin: 0, dMax: Math.max(2, Math.ceil(d3.max(screen) ?? 0)), goal: SCREEN_GOAL_H,
+          },
+          {
+            kind: 'area', name: 'CO₂', unit: 'ppm', h: lineH, data: co2, mid: true,
+            dMin: 400, dMax: Math.max(1000, Math.ceil(co2Max / 100) * 100),
+          },
+          {
+            kind: 'area', name: 'Data Remaining', unit: 'GB', h: lineH, data: dataGB,
+            dMin: 0, dMax: allowance, guide: budget,
+          },
+        ];
+        let y = 0;
+        charts.forEach(c => {c.cy = y; y += c.h + chartGap;});
+        const chartsH = y - chartGap;
+
+        const svg = host.append('svg')
+          .attr('width', COL_W).attr('height', avail)
+          .style('display', 'block').style('overflow', 'visible');
+
+        // Value labels per chart: top and bottom, plus the dashed mid-line's value
+        // (CO₂) or the goal's (screen time). The bottom label is dropped when the
+        // goal sits too close to it to fit both.
+        const capH = labelFs * 0.72;
+        charts.forEach(c => {
+          const yOf = v => c.cy + c.h * (1 - (v - c.dMin) / (c.dMax - c.dMin));
+          c.labels = [{val: c.dMax, y: c.cy + capH}];
+          if (c.mid) c.labels.push({val: (c.dMin + c.dMax) / 2, y: c.cy + c.h / 2 + capH / 2});
+          if (c.goal != null) c.labels.push({val: c.goal, y: yOf(c.goal) + capH / 2});
+          const last = c.labels[c.labels.length - 1];
+          if (c.cy + c.h - last.y > capH * 1.3) c.labels.push({val: c.dMin, y: c.cy + c.h});
+        });
+
+        // Flush layout, as in render(): measure the widest value label so its right
+        // edge lands on the column's right edge, and size the plot to fit.
+        const unitFs = Math.round(labelFs * 0.85);
+        const measure = svg.append('text').attr('font-family', FONT);
+        const maxLabelW = Math.max(...charts.flatMap(c => c.labels.map(({val}) => {
+          measure.selectAll('*').remove();
+          measure.append('tspan').attr('font-size', labelFs).text(Math.round(val));
+          measure.append('tspan').attr('font-size', unitFs).attr('dx', 2).text(c.unit);
+          const b = measure.node().getBBox();
+          return b.x + b.width;
+        })));
+        measure.remove();
+
+        const chartW = COL_W - labelGap - maxLabelW;
+        const x = d3.scaleLinear().domain([mids[0], mids[N_WEEK]]).range([0, chartW]);
+        const slotX = i => (x(mids[i]) + x(mids[i + 1])) / 2;   // centre of day i
+
+        // Pass 1 — fills: one bar per day, or the curve filled down to the floor.
+        charts.forEach(c => {
+          const yScale = d3.scaleLinear().domain([c.dMin, c.dMax]).range([c.cy + c.h, c.cy]).clamp(true);
+          c.yScale = yScale;
+          if (c.kind === 'bars') {
+            const bw = Math.round((x(mids[1]) - x(mids[0])) * 0.62);
+            c.data.forEach((v, i) => {
+              if (v == null || v <= 0) return;
+              const top = Math.round(yScale(v));
+              svg.append('rect')
+                .attr('x', Math.round(slotX(i) - bw / 2)).attr('y', top)
+                .attr('width', bw).attr('height', c.cy + c.h - top)
+                .attr('fill', 'black').attr('shape-rendering', 'crispEdges');
+              // Hours on the bar: inside its top when there's room, else just above.
+              // Blend-difference white, so it reads on either.
+              const inside = c.cy + c.h - top > labelFs * 1.5;
+              const t = svg.append('text')
+                .attr('x', slotX(i)).attr('y', inside ? top + capH + 10 : top - 8)
+                .attr('text-anchor', 'middle').attr('font-family', FONT).attr('font-weight', 500)
+                .attr('fill', 'white').style('mix-blend-mode', 'difference');
+              t.append('tspan').attr('font-size', Math.round(labelFs * 0.85)).text(v.toFixed(1));
+              t.append('tspan').attr('font-size', Math.round(unitFs * 0.85)).attr('dx', 1).text('h');
+            });
+          } else {
+            svg.append('path').datum(c.data)
+              .attr('fill', 'black').attr('stroke', 'none').attr('shape-rendering', 'crispEdges')
+              .attr('d', d3.area().defined(p => p[1] != null)
+                .x(p => x(p[0])).y0(c.cy + c.h).y1(p => yScale(p[1])).curve(d3.curveMonotoneX));
+          }
+        });
+
+        // Pass 2 — notches. Midnights get the major notch (solid at the outer edges,
+        // inset so they don't poke out; blend-mode inside), extending down toward the
+        // day labels under the last chart. Midday gets a minor notch on the curves;
+        // on the bars it would land in each bar's middle.
+        mids.forEach((t, i) => {
+          const isOuter = i === 0 || i === N_WEEK;
+          const vx = isOuter ? (i === 0 ? notchW / 2 : Math.round(chartW) - notchW / 2) : crispX(x(t), notchW);
+          const tick = el => isOuter
+            ? el.attr('stroke', 'black').attr('stroke-width', notchW).attr('shape-rendering', 'crispEdges')
+            : blendTick(el);
+          charts.forEach((c, ci) => {
+            const bot = c.cy + c.h;
+            const topExt = isOuter ? 0 : notch;
+            const botExt = ci === charts.length - 1 ? vExt : (isOuter ? 0 : notch);
+            tick(svg.append('line').attr('x1', vx).attr('y1', c.cy - topExt + 1).attr('x2', vx).attr('y2', c.cy + notch + 1));
+            tick(svg.append('line').attr('x1', vx).attr('y1', bot - notch).attr('x2', vx).attr('y2', bot + botExt));
+          });
+        });
+        d3.range(N_WEEK).forEach(i => {
+          const vx = crispX(slotX(i), notchW);
+          charts.filter(c => c.kind === 'area').forEach(c => {
+            const bot = c.cy + c.h;
+            blendTick(svg.append('line').attr('x1', vx).attr('y1', c.cy + 1).attr('x2', vx).attr('y2', c.cy + notchSm + 1));
+            blendTick(svg.append('line').attr('x1', vx).attr('y1', bot - notchSm).attr('x2', vx).attr('y2', bot));
+          });
+        });
+
+        // Pass 3 — rules, guides, labels and names, over the notches.
+        const solid = el => el.attr('stroke', 'black').attr('stroke-width', GRID_SW).attr('shape-rendering', 'crispEdges');
+        // Goals and budgets are dotted, heavier than the dashed mid-line so the two
+        // never read as the same thing; blend-difference to show across the fills.
+        const dotted = el => el.attr('stroke', 'white').attr('stroke-width', 2).attr('stroke-dasharray', '2,6')
+          .attr('stroke-linecap', 'butt').style('mix-blend-mode', 'difference');
+        charts.forEach(c => {
+          const line = (x1, y1, x2, y2) => svg.append('line').attr('x1', x1).attr('y1', y1).attr('x2', x2).attr('y2', y2);
+          solid(line(0, px(c.cy), chartW, px(c.cy)));
+          solid(line(0, px(c.cy + c.h), chartW, px(c.cy + c.h)));
+          if (c.mid) blendLine(line(0, px(c.cy + c.h / 2), chartW, px(c.cy + c.h / 2)));
+          if (c.goal != null) {
+            const gy = Math.round(c.yScale(c.goal));
+            dotted(line(0, gy, chartW, gy));
+          }
+          if (c.guide) {
+            const [[t1, v1], [t2, v2]] = c.guide;
+            dotted(line(x(t1), c.yScale(v1), x(t2), c.yScale(v2)));
+          }
+
+          const lx = chartW + labelGap;
+          c.labels.forEach(({val, y}) => {
+            const t = svg.append('text').attr('x', lx).attr('y', y).attr('font-family', FONT);
+            t.append('tspan').attr('font-size', labelFs).text(Math.round(val));
+            t.append('tspan').attr('font-size', unitFs).attr('dx', 2).text(c.unit);
+          });
+
+          svg.append('text')
+            .attr('x', 0).attr('y', c.cy - labelFs * 0.4)
+            .attr('font-size', 22).attr('font-family', FONT).attr('fill', 'black')
+            .text(c.name);
+        });
+
+        // Day labels, centred in each slot under the last chart. Today's is set
+        // white on a black pill, as the calendar used to mark it.
+        const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const labelY = chartsH + vExt + 4;
+        d3.range(N_WEEK).forEach(i => {
+          const d = new Date(mids[i] * 1000);
+          const isToday = +d === +today0;
+          if (isToday) {
+            const pw = Math.round((x(mids[1]) - x(mids[0])) * 0.8), ph = Math.round(labelFs * 1.4);
+            svg.append('rect')
+              .attr('x', Math.round(slotX(i) - pw / 2)).attr('y', Math.round(labelY + capH / 2 - ph / 2))
+              .attr('width', pw).attr('height', ph).attr('rx', 10).attr('fill', 'black');
+          }
+          svg.append('text')
+            .attr('x', slotX(i)).attr('y', labelY + capH)
+            .attr('text-anchor', 'middle').attr('font-family', FONT).attr('font-size', labelFs)
+            .attr('font-weight', isToday ? 700 : 400).attr('fill', isToday ? 'white' : 'black')
+            .text(WD[d.getDay()]);
+        });
+      }
+
+      // Re-render both columns (on any cfg change).
+      function renderAll() {
+        render();
+        renderWeek();
+      }
+
+      // ---------------------------------------------------------------------------
       // Conditions — a compact KPI header: a hero current-temp + condition line,
       // then a strip of metric cells (feels-like, high, low, wind). Purely
       // data-driven to match the charts below; no prose.
@@ -775,114 +866,54 @@
         });
       })();
 
-      if (DATA.debug) document.body.classList.add('debug');
-
-      render();
-
       // ---------------------------------------------------------------------------
-      // Calendar — current month grid (Monday-first) with today highlighted.
-      // Date is computed at render time from the host clock.
+      // Left header — today's date over a strip of the latest personal stats.
       // ---------------------------------------------------------------------------
-      (function buildCalendar() {
+      (function buildStatsHeader() {
         const now = new Date();
         const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         const MO = ['January', 'February', 'March', 'April', 'May', 'June',
           'July', 'August', 'September', 'October', 'November', 'December'];
         const ordinal = n => {const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]);};
-        document.getElementById('cal-title').textContent =
+        document.getElementById('date-title').textContent =
           `${WD[now.getDay()]} ${ordinal(now.getDate())} ${MO[now.getMonth()]}`;
 
-        const grid = document.getElementById('cal-grid');
-        ['M', 'T', 'W', 'T', 'F', 'S', 'S'].forEach(d => {
-          const el = document.createElement('div');
-          el.className = 'cal-head';
-          el.textContent = d;
-          grid.appendChild(el);
-        });
+        const W = STATS || {};
+        const u = unit => `<span class="unit txt">${unit}</span>`;
+        const screenToday = (W.screenHours || [])[N_WEEK - 1];
+        const hm = h => {
+          const m = Math.round(h * 60);
+          return m >= 60 ? `${Math.floor(m / 60)}${u('h')} ${m % 60}${u('m')}` : `${m}${u('m')}`;
+        };
+        const renews = (() => {
+          if (!W.boostEnd) return '—';
+          const end = new Date(W.boostEnd * 1000);
+          const days = Math.round((new Date(end.getFullYear(), end.getMonth(), end.getDate()) -
+            new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+          return days <= 0 ? 'Today' : `${days}${u(days === 1 ? 'day' : 'days')}`;
+        })();
 
-        const y = now.getFullYear(), m = now.getMonth();
-        const lead = (new Date(y, m, 1).getDay() + 6) % 7;   // empty cells before the 1st (Mon-first)
-        const days = new Date(y, m + 1, 0).getDate();
-        for (let i = 0; i < lead; i++) grid.appendChild(document.createElement('div'));
-        for (let d = 1; d <= days; d++) {
-          const el = document.createElement('div');
-          el.className = 'cal-day' + (d === now.getDate() ? ' cal-today' : '');
-          el.textContent = d;
-          grid.appendChild(el);
-        }
-      })();
-
-      // ---------------------------------------------------------------------------
-      // Tides — the next few high/low events for the left-column slot below the
-      // calendar. The server injects an array of {type, time (ISO), height} already
-      // filtered to upcoming events; we format the time against the render-local
-      // clock (12h, matching the chart axis), pick the up/down glyph, and tag any
-      // event that isn't today with a relative-day label. An empty array means the
-      // server has no tide data → hide the whole block. Opened straight from disk
-      // (template not processed) → show sample tides so the panel stays visible.
-      // ---------------------------------------------------------------------------
-      (function buildTides() {
-        const panel = document.querySelector('.tides');
-        const list = document.getElementById('tide-list');
-        if (!panel || !list) return;
-
-        const now = new Date();
-        const sample = (hoursAhead, type, height) => ({
-          type, height,
-          time: new Date(now.getTime() + hoursAhead * 3600000).toISOString(),
-        });
-        const SAMPLE = [
-          sample(1.5, 'high', 5.8), sample(7.7, 'low', 1.1),
-          sample(13.9, 'high', 6.0), sample(20.1, 'low', 0.9),
+        const metrics = [
+          {label: 'Screen', html: screenToday != null ? hm(screenToday) : '—'},
+          {label: 'CO₂', html: W.co2Now != null ? `${Math.round(W.co2Now)}${u('ppm')}` : '—'},
+          {label: 'Data left', html: W.dataNowGB != null ? `${W.dataNowGB.toFixed(1)}${u('GB')}` : '—'},
+          {label: 'Renews in', html: renews},
         ];
-
-        let tides;
-        try {
-          tides = JSON.parse(document.getElementById('tides-data').textContent);
-          if (!Array.isArray(tides)) tides = [];
-        } catch (e) {
-          tides = SAMPLE;   // opened from disk → no real data, show the sample
-        }
-        if (!tides.length) {
-          panel.style.display = 'none';   // server has no tide data → collapse the slot
-          return;
-        }
-
-        const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-        const today0 = startOfDay(now);
-        const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-        const fmtTime = d => {
-          let h = d.getHours();
-          const ap = h < 12 ? 'AM' : 'PM';
-          h = h % 12 || 12;
-          return {hm: `${h}:${String(d.getMinutes()).padStart(2, '0')}`, ap};
-        };
-        const dayLabel = d => {
-          const diff = Math.round((startOfDay(d) - today0) / 86400000);
-          if (diff <= 0) return '';            // today (or, defensively, earlier)
-          if (diff === 1) return 'Tomorrow';
-          return WD[d.getDay()];
-        };
-
-        list.innerHTML = '';
-        let lastDay = null;   // show the day tag only when the date changes between rows
-        tides.slice(0, 4).forEach(t => {
-          const d = new Date(t.time);
-          const high = String(t.type).toLowerCase() === 'high';
-          const {hm, ap} = fmtTime(d);
-          const dayKey = startOfDay(d).getTime();
-          const day = dayKey === lastDay ? '' : dayLabel(d);
-          lastDay = dayKey;
-          const height = (typeof t.height === 'number') ? t.height.toFixed(1) : null;
-          const row = document.createElement('div');
-          row.className = 'tide-row';
-          row.innerHTML =
-            `<div class="tide-type"><span class="tide-arrow">${high ? '▲' : '▼'}</span>${high ? 'High' : 'Low'}</div>` +
-            `<div class="tide-time">${day ? `<span class="tide-day">${day}</span>` : ''}${hm}<span class="ap">${ap}</span></div>` +
-            (height != null ? `<div class="tide-height">${height}<span class="unit">m</span></div>` : `<div class="tide-height"></div>`);
-          list.appendChild(row);
+        const wrap = document.getElementById('s-metrics');
+        metrics.forEach(m => {
+          const cell = document.createElement('div');
+          cell.className = 'metric';
+          cell.innerHTML = `<div class="metric-label">${m.label}</div><div class="metric-value">${m.html}</div>`;
+          wrap.appendChild(cell);
         });
       })();
+
+      if (DATA.debug) document.body.classList.add('debug');
+
+      renderAll();
+      // Layout and label widths depend on Inter's metrics; draw again once it has
+      // loaded, so a late web font can't leave the charts sized for the fallback.
+      document.fonts.ready.then(renderAll);
 
       // ---------------------------------------------------------------------------
       // Photo — pick one of the server's images at random and dither it (1-bit
@@ -890,8 +921,8 @@
       // right slot. The headless renderer waits on window.__renderDone before capture.
       // ---------------------------------------------------------------------------
       window.__renderDone = false;
-      const renderDone = () => {window.__renderDone = true;};
-      setTimeout(renderDone, 4000);   // backstop: never block the screenshot forever
+      const renderDone = () => document.fonts.ready.then(() => {window.__renderDone = true;});
+      setTimeout(() => {window.__renderDone = true;}, 4000);   // backstop: never block the screenshot forever
 
       // Dither knobs — edits hot-reload on the next render.
       const DITHER = {
@@ -1073,7 +1104,7 @@
           input.addEventListener('input', () => {
             cfg[key] = Number(input.value);
             val.textContent = cfg[key];
-            render();
+            renderAll();
           });
           lbl.appendChild(val);
           row.appendChild(lbl);
@@ -1123,7 +1154,7 @@
             controls[key].input.value = cfg[key];
             controls[key].val.textContent = cfg[key];
           }
-          render();
+          renderAll();
         };
 
         // Apply — download the current cfg as config.json. Drop it next to the

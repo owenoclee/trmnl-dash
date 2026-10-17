@@ -45,59 +45,24 @@ serve` reads `./config.json`, and the Docker image bakes it in for the k3s
 deployment (rebuild after committing). A missing or invalid file falls back to
 the page's built-in defaults.
 
-## Tide times (optional)
+## Personal stats (left column)
 
-The left column shows the next few high/low tides below the calendar — but only
-if a `tides.json` is present. There's **no live tide fetch**: tides depend on
-local harmonic constants (you can't derive them from latitude/longitude the way
-you can sunrise), so predictions are downloaded once and baked into a file the
-server reads at render time. No file → the panel is hidden, so the feature is
-opt-in — skip it entirely if you're not on the coast.
+The left column charts the last seven days, today on the right, from
+Prometheus: iPhone screen time per day (bars, with the 1-hour goal dotted
+across them), indoor CO₂, and mobile data remaining (with a dotted even-burn
+line from the full allowance to empty at the next refresh). The strip above
+them carries the latest values. The metrics come from the exporters in
+`~/projects/personal-monitoring`; the queries are in `fetchStatsUncached` in
+`server.go`.
 
-`tides.json` is **gitignored**: it's your location's data, kept off the branch.
-Cloners generate their own (or leave it absent).
-
-### Generating tides.json
-
-The included generator pulls high/low predictions from
-[WorldTides](https://www.worldtides.info) — a free key gives 100 credits on
-signup, and extremes cost 1 credit per 7 days, so a single run covers a year or
-two for free:
+Set `TRMNL_PROMETHEUS_URL` (or `--prometheus`) to Prometheus's base URL. Unset
+or unreachable, the charts draw empty; a failed refresh keeps showing the last
+good data. For a local preview against the cluster:
 
 ```bash
-export WORLDTIDES_KEY=xxxxxxxx   # free key: https://www.worldtides.info/register
-go run ./tools/gentides -lat 51.0795 -lon 1.1830 -location Folkestone -days 365
+kubectl -n monitoring port-forward svc/prometheus 19090:9090 &
+TRMNL_PROMETHEUS_URL=http://localhost:19090 make preview
 ```
-
-That writes `tides.json` next to the server. It's re-read on every render, so
-regenerating it (e.g. once a year before it runs dry) needs no restart. Useful
-flags: `-tz` (timezone the times are written in, default `Europe/London` — use
-your device's zone), `-datum` (`LAT` → positive heights / UK chart datum;
-`MSL` → low tides go negative), `-start`, `-out`.
-
-The file is just a list, so you can hand-write it or source it from anywhere
-(see [`tides.example.json`](tides.example.json) for the shape):
-
-```json
-{
-  "location": "Folkestone",
-  "tides": [
-    { "time": "2026-06-27T08:25:00+01:00", "type": "high", "height": 6.4 },
-    { "time": "2026-06-27T14:35:00+01:00", "type": "low",  "height": 1.1 }
-  ]
-}
-```
-
-`time` is RFC3339 in the device's local timezone, `type` is `high`/`low`, and
-`height` is metres. The server picks the next ~4 upcoming events at render time.
-
-In Docker, mount your file at the default `/data/tides.json`
-(`-v $PWD/tides.json:/data/tides.json:ro`) or point `TRMNL_TIDES` elsewhere —
-it's deliberately not baked into the image.
-
-> The official [UK Admiralty tidal API](https://www.api.gov.uk/ukho/uk-tidal-api-discovery/)
-> is an alternative source, but its free tier only returns 6 days ahead, so it
-> fits a daily cron refetch rather than a one-shot bake.
 
 ## BYOS server
 
@@ -171,12 +136,12 @@ All settings are environment variables (see `docker-compose.yml`):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TZ` | `UTC` | Timezone for the rendered calendar/clock — **set this** |
+| `TZ` | `UTC` | Timezone for the rendered date and day labels — **set this** |
 | `TRMNL_LAT` / `TRMNL_LON` / `TRMNL_LOCATION` | _(unset)_ | Weather location; unset disables the weather widget |
 | `TRMNL_REFRESH_RATE` | `1800` | Seconds the device sleeps between polls |
 | `TRMNL_RENDER_INTERVAL` | `300` | Seconds between server-side re-renders |
 | `TRMNL_PHOTO_STRATEGY` | `shuffle` | Photo cycling: `random` \| `shuffle` \| `alphabetical` |
-| `TRMNL_TIDES` | `/data/tides.json` | Path to the baked tide file; absent → tide panel hidden (see [Tide times](#tide-times-optional)) |
+| `TRMNL_PROMETHEUS_URL` | _(unset)_ | Prometheus base URL for the left column; unset → empty charts (see [Personal stats](#personal-stats-left-column)) |
 | `TRMNL_ADDR` | `:8080` | Listen address |
 
 ### Volumes
@@ -230,6 +195,6 @@ make preview ZOOM=50
 
 - [x] Web server with `/api/display` endpoint that returns png
 - [x] Real content widgets: weather (Open-Meteo - temp, high/low, wind, hourly chart)
-- [x] Tide times widget (optional, baked `tides.json` — off the branch, hidden when absent)
+- [x] Personal stats from Prometheus: screen time, CO₂, mobile data
 - [ ] Restrict device access: allow-list or auth flow (`/api/display` currently adopts any non-empty token on first contact)
 - [x] Hot-reload in preview

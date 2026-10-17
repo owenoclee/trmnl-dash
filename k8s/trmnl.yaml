@@ -13,7 +13,7 @@ metadata:
   name: trmnl-config
   namespace: trmnl
 data:
-  # Calendar/clock render from the container clock — set your timezone.
+  # The date and day labels render from the container clock — set your timezone.
   TZ: "Etc/UTC"
   # Weather (Open-Meteo). Clear all three to disable the weather widget.
   TRMNL_LAT: "51.5074"
@@ -23,6 +23,8 @@ data:
   TRMNL_REFRESH_RATE: "1800"    # seconds the device sleeps between polls
   TRMNL_RENDER_INTERVAL: "300"  # seconds between server-side re-renders
   TRMNL_PHOTO_STRATEGY: "shuffle"
+  # Left column charts (screen time, CO₂, mobile data). Unset → empty charts.
+  # TRMNL_PROMETHEUS_URL: "http://prometheus.monitoring.svc.cluster.local:9090"
 ---
 apiVersion: apps/v1
 kind: Deployment
