@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#E4E5E1">
+  <meta name="color-scheme" content="light">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Photo frame">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="icon" href="icon.png">
+  <title>Photo frame</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <!-- Library: what's on the frame now. -->
+  <main id="library" class="view" hidden>
+    <header class="lib-head">
+      <h1>Photo frame</h1>
+      <p class="lede" id="lib-lede"></p>
+    </header>
+    <p class="empty" id="lib-empty" hidden>
+      Nothing added yet.
+    </p>
+    <ul class="grid" id="grid"></ul>
+    <div class="bar">
+      <label class="btn primary" for="picker">Add photos</label>
+      <input type="file" id="picker" accept="image/*" multiple hidden>
+    </div>
+  </main>
+
+  <!-- Editor: frame one photo at a time. -->
+  <section id="editor" class="view" hidden>
+    <nav class="ed-nav">
+      <button class="link" id="ed-cancel" type="button">Cancel</button>
+      <span id="ed-count"></span>
+    </nav>
+    <div class="stage" id="stage" tabindex="0" role="application"
+         aria-label="Photo framing. Drag to move, pinch or use plus and minus to zoom.">
+      <canvas id="stage-canvas"></canvas>
+    </div>
+    <p class="hint" id="ed-hint" aria-live="polite">Drag to move, pinch to zoom.</p>
+    <h2 class="sub">On the frame</h2>
+    <canvas class="preview" id="preview"></canvas>
+    <p class="error" id="ed-error" hidden></p>
+    <div class="bar two">
+      <button class="btn" id="ed-skip" type="button">Skip</button>
+      <button class="btn primary" id="ed-add" type="button">Add to frame</button>
+    </div>
+  </section>
+
+  <!-- One photo, larger, with removal. -->
+  <div class="sheet-scrim" id="scrim" hidden></div>
+  <section class="sheet" id="sheet" hidden aria-modal="true" role="dialog" aria-labelledby="sheet-title">
+    <h2 class="sub" id="sheet-title">On the frame</h2>
+    <canvas class="preview" id="sheet-preview"></canvas>
+    <p class="meta" id="sheet-meta"></p>
+    <div class="bar two">
+      <button class="btn" id="sheet-close" type="button">Done</button>
+      <button class="btn danger" id="sheet-remove" type="button">Remove from frame</button>
+    </div>
+  </section>
+
+  <!-- No key, or a bad one. -->
+  <main id="locked" class="view locked" hidden>
+    <h1>Photo frame</h1>
+    <p id="locked-msg"></p>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

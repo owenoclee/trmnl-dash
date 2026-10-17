@@ -12,6 +12,9 @@ Makefile
 
 # Runtime / local-only files
 photos/
+uploads/
+# The phone uploader is a separate Cloudflare Worker
+uploader/
 *.png
 trmnl-*.html
 devices.json

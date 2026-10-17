@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -584,35 +585,59 @@ var photoExts = map[string]bool{
 	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
 }
 
-// listPhotoURLs returns absolute loopback URLs for every image in photosDir,
-// sorted by filename. Which one is shown is decided by advancePhoto.
-func listPhotoURLs() []string {
-	if photosDir == "" {
+// photoRef is one photo as handed to the page: an absolute loopback URL, and
+// for uploads the focus rect (x, y, w, h in the image's pixels) the page zooms
+// to fit. Photos from photosDir have no focus and are centre-cropped.
+type photoRef struct {
+	URL   string  `json:"url"`
+	Focus *[4]int `json:"focus,omitempty"`
+}
+
+// listPhotos returns every photo in rotation — photosDir's files, then the
+// uploads mirrored from the phone — each list sorted by name. Which one is
+// shown is decided by advancePhoto.
+func listPhotos() []photoRef {
+	var refs []photoRef
+	for _, n := range listDir(photosDir, func(name string) bool {
+		return photoExts[strings.ToLower(filepath.Ext(name))]
+	}) {
+		refs = append(refs, photoRef{URL: renderBaseURL + "/photos/" + url.PathEscape(n)})
+	}
+	for _, n := range listDir(uploadsDir, func(name string) bool {
+		return strings.HasSuffix(name, ".tgry") && uploadID.MatchString(strings.TrimSuffix(name, ".tgry"))
+	}) {
+		id := strings.TrimSuffix(n, ".tgry")
+		focus, err := readTGRYFocus(filepath.Join(uploadsDir, n))
+		if err != nil {
+			log.Printf("[uploads] skipping %s: %v", n, err)
+			continue
+		}
+		refs = append(refs, photoRef{URL: renderBaseURL + "/uploads/" + id + ".png", Focus: &focus})
+	}
+	return refs
+}
+
+// listDir returns the sorted names of the regular files in dir that keep()
+// accepts. Dotfiles are skipped: macOS junk such as .DS_Store and especially
+// "._name.jpg" AppleDouble files carry an image extension but aren't images,
+// and otherwise enter the rotation and render as a blank photo.
+func listDir(dir string, keep func(string) bool) []string {
+	if dir == "" {
 		return nil
 	}
-	entries, err := os.ReadDir(photosDir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 	var names []string
 	for _, e := range entries {
-		// Skip subdirs and dotfiles. The latter guards against macOS junk that
-		// carries an image extension but isn't a decodable image — .DS_Store and
-		// especially "._name.jpg" AppleDouble files, which otherwise enter the
-		// rotation and render as a blank photo when selected.
-		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || !keep(e.Name()) {
 			continue
 		}
-		if photoExts[strings.ToLower(filepath.Ext(e.Name()))] {
-			names = append(names, e.Name())
-		}
+		names = append(names, e.Name())
 	}
 	sort.Strings(names)
-	urls := make([]string, 0, len(names))
-	for _, n := range names {
-		urls = append(urls, renderBaseURL+"/photos/"+url.PathEscape(n))
-	}
-	return urls
+	return names
 }
 
 // Photo selection state. The chosen photo advances only on /api/display, so
@@ -620,42 +645,48 @@ func listPhotoURLs() []string {
 // the selection stays put until the device actually fetches again.
 var (
 	photoMu        sync.Mutex
-	photoStrategy  string   // "random" | "shuffle" | "alphabetical" (set at startup)
-	photoSelection string   // currently-chosen photo URL
-	photoOrder     []string // shuffle: the shuffled order being walked
-	photoOrderSig  string   // file-set signature photoOrder was built from
-	photoIdx       int      // position within photoOrder / the alphabetical cycle
+	photoStrategy  string     // "random" | "shuffle" | "alphabetical" (set at startup)
+	photoSelection *photoRef  // currently-chosen photo
+	photoOrder     []photoRef // shuffle: the shuffled order being walked
+	photoOrderSig  string     // file-set signature photoOrder was built from
+	photoIdx       int        // position within photoOrder / the alphabetical cycle
 )
 
 // advancePhoto moves the selection to the next photo per the configured strategy.
 // Call once per /api/display so the image changes only when the device fetches.
 func advancePhoto() {
-	urls := listPhotoURLs()
+	refs := listPhotos()
 	photoMu.Lock()
 	defer photoMu.Unlock()
-	if len(urls) == 0 {
-		photoSelection = ""
+	if len(refs) == 0 {
+		photoSelection = nil
 		return
 	}
+	var next photoRef
 	switch photoStrategy {
 	case "alphabetical":
-		photoSelection = urls[photoIdx%len(urls)] // listPhotoURLs is sorted by name
+		next = refs[photoIdx%len(refs)] // listPhotos is sorted by name
 		photoIdx++
 	case "shuffle":
+		urls := make([]string, len(refs))
+		for i, r := range refs {
+			urls[i] = r.URL
+		}
 		sig := strings.Join(urls, "\x00")
 		if photoIdx >= len(photoOrder) || sig != photoOrderSig {
-			photoOrder = append([]string(nil), urls...)
+			photoOrder = append([]photoRef(nil), refs...)
 			rand.Shuffle(len(photoOrder), func(i, j int) {
 				photoOrder[i], photoOrder[j] = photoOrder[j], photoOrder[i]
 			})
 			photoOrderSig = sig
 			photoIdx = 0
 		}
-		photoSelection = photoOrder[photoIdx]
+		next = photoOrder[photoIdx]
 		photoIdx++
 	default: // random
-		photoSelection = urls[rand.Intn(len(urls))]
+		next = refs[rand.Intn(len(refs))]
 	}
+	photoSelection = &next
 }
 
 // currentPhotoJSON injects the currently-selected photo as a 0- or 1-element
@@ -664,12 +695,199 @@ func currentPhotoJSON() template.JS {
 	photoMu.Lock()
 	sel := photoSelection
 	photoMu.Unlock()
-	var arr []string
-	if sel != "" {
-		arr = []string{sel}
+	arr := []photoRef{}
+	if sel != nil {
+		arr = append(arr, *sel)
 	}
 	b, _ := json.Marshal(arr)
 	return template.JS(b)
+}
+
+// -- uploads (photos.pog.so) --
+//
+// Photos added from the phone live in an R2 bucket behind the uploader Worker
+// (uploader/ in this repo). Every few minutes the server mirrors them into
+// uploadsDir with the Worker's read-only display token, so a render never
+// waits on the network and an outage just freezes the set. They arrive as TGRY
+// — raw greyscale behind a fixed header (uploader/public/format.js) — so no
+// image decoder ever runs on them here: parseTGRY checks the header and length
+// exactly as the Worker did, and they're served to the page as PNGs encoded
+// from the validated pixels.
+
+const (
+	tgryHeader   = 20
+	tgryMinDim   = 16
+	tgryMaxDim   = 4096
+	tgryMaxPix   = 4_000_000
+	uploadsEvery = 5 * time.Minute
+)
+
+var (
+	uploadsURL   string
+	uploadsToken string
+	uploadsDir   string
+	uploadID     = regexp.MustCompile(`^[0-9a-z]{8,12}-[0-9a-f]{8}$`)
+	uploadClient = &http.Client{Timeout: 60 * time.Second}
+)
+
+type tgry struct {
+	W, H  int
+	Focus [4]int
+	Pix   []byte
+}
+
+// parseTGRY validates a whole TGRY file. Keep in step with format.js's parse.
+func parseTGRY(b []byte) (*tgry, error) {
+	if len(b) < tgryHeader {
+		return nil, fmt.Errorf("too short for a header")
+	}
+	if string(b[:4]) != "TGRY" || b[4] != 1 || b[5]|b[6]|b[7] != 0 {
+		return nil, fmt.Errorf("not a TGRY v1 header")
+	}
+	u16 := func(off int) int { return int(b[off]) | int(b[off+1])<<8 }
+	t := &tgry{W: u16(8), H: u16(10), Focus: [4]int{u16(12), u16(14), u16(16), u16(18)}}
+	if t.W < tgryMinDim || t.H < tgryMinDim || t.W > tgryMaxDim || t.H > tgryMaxDim || t.W*t.H > tgryMaxPix {
+		return nil, fmt.Errorf("bad dimensions %dx%d", t.W, t.H)
+	}
+	f := t.Focus
+	if f[2] < tgryMinDim || f[3] < tgryMinDim || f[0]+f[2] > t.W || f[1]+f[3] > t.H {
+		return nil, fmt.Errorf("focus outside image")
+	}
+	if len(b) != tgryHeader+t.W*t.H {
+		return nil, fmt.Errorf("length %d, want %d", len(b), tgryHeader+t.W*t.H)
+	}
+	t.Pix = b[tgryHeader:]
+	return t, nil
+}
+
+// readTGRYFocus reads just the focus rect of a mirrored upload (already
+// validated when it was written).
+func readTGRYFocus(path string) ([4]int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return [4]int{}, err
+	}
+	defer f.Close()
+	h := make([]byte, tgryHeader)
+	if _, err := io.ReadFull(f, h); err != nil {
+		return [4]int{}, err
+	}
+	u16 := func(off int) int { return int(h[off]) | int(h[off+1])<<8 }
+	return [4]int{u16(12), u16(14), u16(16), u16(18)}, nil
+}
+
+func uploadsGet(path string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", uploadsURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+uploadsToken)
+	resp, err := uploadClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("GET %s: %s", path, resp.Status)
+	}
+	return resp, nil
+}
+
+// syncUploads makes uploadsDir match the bucket: fetch what's new, drop what
+// was removed on the phone. A failed listing changes nothing locally.
+func syncUploads() {
+	resp, err := uploadsGet("/api/photos")
+	if err != nil {
+		log.Printf("[uploads] list: %v", err)
+		return
+	}
+	var listing struct {
+		Photos []struct {
+			ID string `json:"id"`
+		} `json:"photos"`
+	}
+	err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&listing)
+	resp.Body.Close()
+	if err != nil {
+		log.Printf("[uploads] list decode: %v", err)
+		return
+	}
+	if err := os.MkdirAll(uploadsDir, 0o755); err != nil {
+		log.Printf("[uploads] %v", err)
+		return
+	}
+
+	want := map[string]bool{}
+	added := 0
+	for _, p := range listing.Photos {
+		if !uploadID.MatchString(p.ID) {
+			continue
+		}
+		want[p.ID+".tgry"] = true
+		dst := filepath.Join(uploadsDir, p.ID+".tgry")
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
+		if err := fetchUpload(p.ID, dst); err != nil {
+			log.Printf("[uploads] %s: %v", p.ID, err)
+			continue
+		}
+		added++
+	}
+	removed := 0
+	for _, n := range listDir(uploadsDir, func(string) bool { return true }) {
+		if !want[n] {
+			if os.Remove(filepath.Join(uploadsDir, n)) == nil {
+				removed++
+			}
+		}
+	}
+	if added+removed > 0 {
+		log.Printf("[uploads] %d in the bucket: +%d -%d", len(want), added, removed)
+	}
+}
+
+func fetchUpload(id, dst string) error {
+	resp, err := uploadsGet("/api/photos/" + id)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, tgryHeader+tgryMaxPix+1))
+	if err != nil {
+		return err
+	}
+	if _, err := parseTGRY(b); err != nil {
+		return fmt.Errorf("rejected: %w", err)
+	}
+	tmp := dst + ".part"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
+// serveUpload serves a mirrored upload as a greyscale PNG for the page.
+func serveUpload(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSuffix(r.PathValue("file"), ".png")
+	if !uploadID.MatchString(id) || !strings.HasSuffix(r.PathValue("file"), ".png") {
+		http.NotFound(w, r)
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(uploadsDir, id+".tgry"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	t, err := parseTGRY(b)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	img := &image.Gray{Pix: t.Pix, Stride: t.W, Rect: image.Rect(0, 0, t.W, t.H)}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Access-Control-Allow-Origin", "*") // read back into a canvas from file://
+	(&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(w, img)
 }
 
 // loopbackURL turns a listen address (":8080", "0.0.0.0:8080") into the
@@ -1067,6 +1285,8 @@ func main() {
 	cfgFile     := flag.String("config", "config.json", "Chart tunables file (written by the preview panel's Apply button)")
 	prom        := flag.String("prometheus", os.Getenv("TRMNL_PROMETHEUS_URL"), "Prometheus base URL for the left column's charts (or set TRMNL_PROMETHEUS_URL); empty → empty charts")
 	photos      := flag.String("photos", "photos", "Directory of images to cycle through")
+	uploads     := flag.String("uploads-url", os.Getenv("TRMNL_UPLOADS_URL"), "Photo uploader base URL, e.g. https://photos.pog.so (or set TRMNL_UPLOADS_URL; token in TRMNL_UPLOADS_TOKEN); empty → no uploads")
+	uploadsD    := flag.String("uploads-dir", "uploads", "Where photos from the uploader are mirrored")
 	renderEvery := flag.Int("render-interval", 300, "Seconds between background re-renders (production)")
 	photoStrat  := flag.String("photo-strategy", "shuffle", "Photo cycling: random | shuffle | alphabetical")
 	lat         := flag.Float64("lat", envFloat("TRMNL_LAT"), "Weather latitude (or set TRMNL_LAT)")
@@ -1078,6 +1298,9 @@ func main() {
 	configPath = *cfgFile
 	promURL = strings.TrimRight(*prom, "/")
 	photosDir = *photos
+	uploadsURL = strings.TrimRight(*uploads, "/")
+	uploadsToken = os.Getenv("TRMNL_UPLOADS_TOKEN")
+	uploadsDir = *uploadsD
 	renderBaseURL = loopbackURL(*addr)
 	photoStrategy = *photoStrat
 	switch photoStrategy {
@@ -1105,6 +1328,7 @@ func main() {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		photoFS.ServeHTTP(w, r)
 	})
+	mux.HandleFunc("GET /uploads/{file}", serveUpload)
 
 	log.Printf("TRMNL BYOS server (html-stack)")
 	log.Printf("  addr:           %s", *addr)
@@ -1127,7 +1351,12 @@ func main() {
 	}
 	log.Printf("  devices file:   %s", devicesPath)
 	log.Printf("  devices loaded: %d", len(byMAC))
-	log.Printf("  photos:         %s (%d found)", photosDir, len(listPhotoURLs()))
+	log.Printf("  photos:         %s", photosDir)
+	if uploadsURL != "" && uploadsToken != "" {
+		log.Printf("  uploads:        %s → %s (every %s)", uploadsURL, uploadsDir, uploadsEvery)
+	} else {
+		log.Printf("  uploads:        not configured")
+	}
 	log.Printf("  photo-strategy: %s", photoStrategy)
 	if !devMode {
 		log.Printf("  render-every:   %ds (pre-rendered; device polls never wait on a render)", *renderEvery)
@@ -1140,6 +1369,17 @@ func main() {
 		log.Fatalf("listen %s: %v", *addr, err)
 	}
 	go func() { log.Fatalf("serve: %v", http.Serve(ln, mux)) }()
+
+	// Mirror the phone's uploads before the first render, then keep them fresh.
+	if uploadsURL != "" && uploadsToken != "" {
+		syncUploads()
+		go func() {
+			for range time.Tick(uploadsEvery) {
+				syncUploads()
+			}
+		}()
+	}
+	log.Printf("  photos found:   %d", len(listPhotos()))
 
 	if !devMode {
 		renderOnce := func() {

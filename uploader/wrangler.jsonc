@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "trmnl-photos",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-03-01",
+  "account_id": "9ce4ad4afdfa9d1166c8d264810472ce",
+  // The page is static; only /api runs the Worker.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "r2_buckets": [{"binding": "PHOTOS", "bucket_name": "trmnl-photos"}],
+  "routes": [{"pattern": "photos.pog.so", "custom_domain": true}],
+  "workers_dev": false,
+  "preview_urls": false
+  // Secrets (wrangler secret put): UPLOAD_TOKEN for the phone, DISPLAY_TOKEN
+  // for the TRMNL server. Locally, put both in .dev.vars.
+}

@@ -2,9 +2,9 @@
 # Maps TRMNL_* env vars to the server's flags so the container is configured
 # entirely through the environment (ConfigMap / `docker run -e` / compose).
 #
-# Weather (TRMNL_LAT / TRMNL_LON / TRMNL_LOCATION), TRMNL_PROMETHEUS_URL and TZ
-# are read directly from the environment by the binary, so they don't need
-# mapping here.
+# Weather (TRMNL_LAT / TRMNL_LON / TRMNL_LOCATION), TRMNL_PROMETHEUS_URL,
+# TRMNL_UPLOADS_URL / TRMNL_UPLOADS_TOKEN and TZ are read directly from the
+# environment by the binary, so they don't need mapping here.
 #
 # Anything passed as container args is appended after the flags below, so a
 # later "--flag value" overrides the env-derived default.
@@ -17,6 +17,7 @@ exec trmnl \
   --devices "${TRMNL_DEVICES_FILE:-/data/devices.json}" \
   --config "${TRMNL_CONFIG:-/app/config.json}" \
   --photos "${TRMNL_PHOTOS_DIR:-/photos}" \
+  --uploads-dir "${TRMNL_UPLOADS_DIR:-/data/uploads}" \
   ${TRMNL_REFRESH_RATE:+--refresh-rate "$TRMNL_REFRESH_RATE"} \
   ${TRMNL_RENDER_INTERVAL:+--render-interval "$TRMNL_RENDER_INTERVAL"} \
   ${TRMNL_PHOTO_STRATEGY:+--photo-strategy "$TRMNL_PHOTO_STRATEGY"} \

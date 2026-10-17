@@ -64,6 +64,17 @@ kubectl -n monitoring port-forward svc/prometheus 19090:9090 &
 TRMNL_PROMETHEUS_URL=http://localhost:19090 make preview
 ```
 
+## Photos from a phone (photos.pog.so)
+
+Besides `photos/`, the bottom-left slot rotates through photos added from a
+phone at a private page: pick several, drag and pinch each into the frame's
+shape with a live preview of the dither, add. The page and its API are a
+Cloudflare Worker with the photos in R2; see [`uploader/`](uploader/README.md).
+
+The server mirrors them every 5 minutes into `--uploads-dir` when
+`TRMNL_UPLOADS_URL` and `TRMNL_UPLOADS_TOKEN` (the Worker's read-only display
+token) are set, and shows each one zoomed to the frame chosen on the phone.
+
 ## BYOS server
 
 `server.go` implements the [TRMNL BYOS](https://docs.trmnl.com/go/diy/byos) (Bring Your Own Server) protocol so the physical device can pull content directly from your machine.
@@ -141,6 +152,8 @@ All settings are environment variables (see `docker-compose.yml`):
 | `TRMNL_REFRESH_RATE` | `1800` | Seconds the device sleeps between polls |
 | `TRMNL_RENDER_INTERVAL` | `300` | Seconds between server-side re-renders |
 | `TRMNL_PHOTO_STRATEGY` | `shuffle` | Photo cycling: `random` \| `shuffle` \| `alphabetical` |
+| `TRMNL_UPLOADS_URL` / `TRMNL_UPLOADS_TOKEN` | _(unset)_ | Photo uploader and its display token; unset → no uploads (see [Photos from a phone](#photos-from-a-phone-photospogso)) |
+| `TRMNL_UPLOADS_DIR` | `/data/uploads` | Where uploads are mirrored |
 | `TRMNL_PROMETHEUS_URL` | _(unset)_ | Prometheus base URL for the left column; unset → empty charts (see [Personal stats](#personal-stats-left-column)) |
 | `TRMNL_ADDR` | `:8080` | Listen address |
 
