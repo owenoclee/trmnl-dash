@@ -269,6 +269,13 @@
 
   <!-- Chart rendering — pure presentation, no data fetching -->
   <script>
+    // The headless render waits on this flag. Armed first, so that a script
+    // error further down still lets the screenshot happen after 4s instead of
+    // failing the render outright.
+    window.__renderDone = false;
+    setTimeout(() => {window.__renderDone = true;}, 4000);
+  </script>
+  <script>
     (function () {
       const DATA = (() => {
         try {return JSON.parse(document.getElementById('chart-data').textContent);} catch (e) { }
@@ -920,9 +927,7 @@
       // Atkinson) on a <canvas> at the device's pixel resolution into the bottom-
       // right slot. The headless renderer waits on window.__renderDone before capture.
       // ---------------------------------------------------------------------------
-      window.__renderDone = false;
       const renderDone = () => document.fonts.ready.then(() => {window.__renderDone = true;});
-      setTimeout(() => {window.__renderDone = true;}, 4000);   // backstop: never block the screenshot forever
 
       // Dither knobs — edits hot-reload on the next render.
       const DITHER = {

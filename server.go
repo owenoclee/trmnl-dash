@@ -139,8 +139,9 @@ type weatherData struct {
 }
 
 var (
-	weatherMu    sync.Mutex
-	weatherCache *weatherData
+	weatherMu     sync.Mutex
+	weatherCache  *weatherData
+	weatherClient = &http.Client{Timeout: 15 * time.Second}
 )
 
 func fetchWeather(lat, lon float64) (*weatherData, error) {
@@ -188,15 +189,25 @@ func fetchWeatherUncached(lat, lon float64) (*weatherData, error) {
 		lat, lon,
 	)
 
-	resp, err := http.Get(url) //nolint:noctx
+	resp, err := weatherClient.Get(url) //nolint:noctx
 	if err != nil {
 		return nil, fmt.Errorf("weather fetch: %w", err)
 	}
 	defer resp.Body.Close()
+	// Open-Meteo's error replies are JSON too, and decode into all-zero weather
+	// with no hourly series — which the page can't chart. Only a 200 with the
+	// series present counts as data.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("weather fetch: %s", resp.Status)
+	}
 
 	var wr weatherResponse
 	if err := json.NewDecoder(resp.Body).Decode(&wr); err != nil {
 		return nil, fmt.Errorf("weather decode: %w", err)
+	}
+	if len(wr.Hourly.Temperature) < 24 || len(wr.Hourly.WindSpeed) < 24 ||
+		len(wr.Hourly.PrecipProbability) < 24 || len(wr.Hourly.UVIndex) < 24 {
+		return nil, fmt.Errorf("weather decode: hourly series missing")
 	}
 
 	cap24 := func(s []float64) []float64 {
