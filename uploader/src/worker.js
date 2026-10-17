@@ -7,7 +7,8 @@
 // The phone's link carries its token in the URL fragment, which browsers never
 // send, so it stays out of request logs; the page sends it as a header.
 //
-// Uploads are TGRY (see public/format.js), produced in the browser. This Worker
+// Uploads are a TGRY photo plus a TRGB thumbnail (see public/format.js),
+// produced in the browser. This Worker
 // checks the header fields and exact length and stores the bytes as they came;
 // no image decoder runs here, or on the TRMNL.
 

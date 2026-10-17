@@ -15,7 +15,8 @@ TRMNL server ─(DISPLAY_TOKEN, every 5 min)─┘  mirrors into --uploads-dir
 
 The phone decodes the photo (its own browser, whatever format it can open),
 crops and scales it, and sends **TGRY**: raw 8-bit greyscale behind a fixed
-20-byte header that also records the chosen frame (`public/format.js`). The
+20-byte header that also records the chosen frame (`public/format.js`), plus a
+small colour thumbnail of the frame in **TRGB**, the same with RGB pixels. The
 Worker checks every header field and the exact length and stores the bytes as
 they came; the TRMNL server checks them again (`parseTGRY` in `server.go`) and
 encodes PNGs from the validated pixels for its own page. No image library ever

@@ -52,12 +52,20 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
-// A TGRY image as a canvas at its own size, for drawImage.
-function tgryCanvas(bytes) {
-  const info = parse(bytes);
-  const c = document.createElement('canvas');
+// A stored image (TGRY photo or TRGB thumbnail) as a canvas at its own size.
+function imageCanvas(bytes, kind = 'TGRY', c = document.createElement('canvas')) {
+  const info = parse(bytes, {kind, maxDim: 4096});
   c.width = info.width; c.height = info.height;
-  putGrey(c.getContext('2d'), bytes.subarray(20, info.size), info.width, info.height);
+  const ctx = c.getContext('2d'), px = bytes.subarray(20, info.size);
+  if (kind === 'TGRY') {
+    putGrey(ctx, px, info.width, info.height);
+  } else {
+    const im = ctx.createImageData(info.width, info.height), d = im.data;
+    for (let i = 0, j = 0; i < d.length; i += 4, j += 3) {
+      d[i] = px[j]; d[i + 1] = px[j + 1]; d[i + 2] = px[j + 2]; d[i + 3] = 255;
+    }
+    ctx.putImageData(im, 0, 0);
+  }
   return {canvas: c, ...info};
 }
 
@@ -81,8 +89,8 @@ async function loadLibrary() {
 function renderLibrary() {
   const n = photos.length;
   $('lib-lede').textContent = n
-    ? `${n} ${n === 1 ? 'photo' : 'photos'} from you, taking turns with the others. The frame changes every half hour.`
-    : 'Photos you add here take turns on the frame. It changes every half hour.';
+    ? `${n} ${n === 1 ? 'photo takes its' : 'photos take'} turn on the frame, changing every half hour.`
+    : 'Photos you add here take turns on the frame, changing every half hour.';
   show('lib-empty', n === 0 && pending.length === 0);
 
   const grid = $('grid');
@@ -110,7 +118,7 @@ function pendingTile(p) {
   return li;
 }
 
-const thumbCache = new Map();   // id → dithered canvas
+const thumbCache = new Map();   // id → colour thumbnail canvas
 
 function photoTile(p) {
   const li = document.createElement('li');
@@ -143,8 +151,9 @@ function pumpThumbs() {
     api(`/api/photos/${id}/thumb`)
       .then(r => r.arrayBuffer())
       .then(buf => {
-        const t = tgryCanvas(new Uint8Array(buf));
-        renderDithered(canvas, t.canvas, [0, 0, t.width, t.height], THUMB_W, THUMB_H);
+        // Colour since 17 Oct 2026; the first uploads have greyscale thumbnails.
+        const bytes = new Uint8Array(buf);
+        imageCanvas(bytes, String.fromCharCode(...bytes.subarray(0, 4)) === 'TGRY' ? 'TGRY' : 'TRGB', canvas);
       })
       .catch(() => {})
       .finally(() => {thumbsActive--; pumpThumbs();});
@@ -163,13 +172,14 @@ async function openSheet(p) {
   remove.textContent = 'Remove from frame';
   remove.disabled = false;
   $('sheet-meta').textContent = `Added ${new Date(p.uploaded).toLocaleDateString(undefined, {day: 'numeric', month: 'long', year: 'numeric'})}`;
+  // Blank until the full photo arrives: a thumbnail dithered at this size would
+  // look different from the frame, and this view is the accurate one.
   const c = $('sheet-preview');
-  const thumb = thumbCache.get(p.id);
-  if (thumb?.width) renderDithered(c, thumb, [0, 0, thumb.width, thumb.height]);   // stand-in while the full one loads
+  c.width = c.width;
   show('scrim'); show('sheet');
   $('sheet-close').focus();
   try {
-    const t = tgryCanvas(new Uint8Array(await (await api(`/api/photos/${p.id}`)).arrayBuffer()));
+    const t = imageCanvas(new Uint8Array(await (await api(`/api/photos/${p.id}`)).arrayBuffer()));
     if (sheetPhoto === p) renderDithered(c, t.canvas, displayRect(t.width, t.height, t.focus));
   } catch (e) { /* keep the thumbnail */ }
 }
@@ -458,15 +468,23 @@ function bindStage() {
 // Encoding and upload
 // ---------------------------------------------------------------------------
 
-// greyBytes draws the [sx, sy, sw, sh] part of `source` at w×h and returns its
-// luminance as bytes.
-function greyBytes(source, [sx, sy, sw, sh], w, h) {
+// pixelBytes draws the [sx, sy, sw, sh] part of `source` at w×h and returns
+// its pixels: luminance bytes for 'TGRY', R, G, B bytes for 'TRGB'.
+function pixelBytes(source, [sx, sy, sw, sh], w, h, kind) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d', {willReadFrequently: true});
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(source, sx, sy, sw, sh, 0, 0, w, h);
-  const d = ctx.getImageData(0, 0, w, h).data, out = new Uint8Array(w * h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  if (kind === 'TRGB') {
+    const out = new Uint8Array(w * h * 3);
+    for (let i = 0, j = 0; j < out.length; i += 4, j += 3) {
+      out[j] = d[i]; out[j + 1] = d[i + 1]; out[j + 2] = d[i + 2];
+    }
+    return out;
+  }
+  const out = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) out[i] = Math.round(0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]);
   return out;
 }
@@ -491,8 +509,9 @@ function encodeUpload() {
     Math.min(fx, ow - 16), Math.min(fy, oh - 16),
     Math.max(16, Math.min(Math.round(fw * s), ow - fx)), Math.max(16, Math.min(Math.round(fh * s), oh - fy)),
   ];
-  const image = encode(ow, oh, focus, greyBytes(src, [rx, ry, rw, rh], ow, oh));
-  const thumb = encode(THUMB_W, THUMB_H, [0, 0, THUMB_W, THUMB_H], greyBytes(src, [fl, ft, fw, fh], THUMB_W, THUMB_H));
+  const image = encode(ow, oh, focus, pixelBytes(src, [rx, ry, rw, rh], ow, oh, 'TGRY'));
+  const thumbPx = pixelBytes(src, [fl, ft, fw, fh], THUMB_W, THUMB_H, 'TRGB');
+  const thumb = encode(THUMB_W, THUMB_H, [0, 0, THUMB_W, THUMB_H], thumbPx, 'TRGB');
   const body = new Uint8Array(image.length + thumb.length);
   body.set(image); body.set(thumb, image.length);
   return body;
@@ -506,7 +525,10 @@ function addCurrent() {
   if (!src) return;
   const body = encodeUpload();
   const thumb = document.createElement('canvas');
-  renderDithered(thumb, src, [frameLeft(), frameTop(), F.w, F.w / SLOT_ASPECT], THUMB_W, THUMB_H);
+  thumb.width = THUMB_W; thumb.height = THUMB_H;
+  const tctx = thumb.getContext('2d');
+  tctx.imageSmoothingQuality = 'high';
+  tctx.drawImage(src, frameLeft(), frameTop(), F.w, F.w / SLOT_ASPECT, 0, 0, THUMB_W, THUMB_H);
   const p = {key: Math.random(), thumb, progress: 0, error: null, body};
   pending.unshift(p);
   uploadQueue.push(p);
