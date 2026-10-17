@@ -89,7 +89,7 @@ async function loadLibrary() {
 function renderLibrary() {
   const n = photos.length;
   $('lib-lede').textContent = n
-    ? `${n} ${n === 1 ? 'photo takes its' : 'photos take'} turn on the frame, changing every half hour.`
+    ? `${n} ${n === 1 ? 'photo is' : 'photos take turns'} on the frame, changing every half hour.`
     : 'Photos you add here take turns on the frame, changing every half hour.';
   show('lib-empty', n === 0 && pending.length === 0);
 
