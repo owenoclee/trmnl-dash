@@ -45,18 +45,25 @@ docker push <registry>/trmnl:latest
 kubectl -n trmnl rollout restart deploy/trmnl
 ```
 
-If instead you run a **ClusterIP-only in-cluster registry** (common on k3s — not
-reachable from outside the cluster), `make deploy` ships the image *through a
-node* you can SSH to: it imports the build into the node's containerd, then pushes
-to the registry the node can reach, and rolls the deployment.
+If instead your registry is only reachable some other way (a ClusterIP-only
+or loopback-only registry behind an SSH tunnel, say), `make deploy` builds the
+image as an OCI layout and hands it to a push script of your own, then rolls the
+deployment:
 
 ```bash
-make deploy DEPLOY_HOST=<user>@<node> REGISTRY_CIP=<registry-clusterip>:5000
+make deploy PUSH_IMAGE=/path/to/push-image.sh   # called as: <oci-layout-dir> trmnl:latest
 ```
 
-Set `DEPLOY_HOST` and `REGISTRY_CIP` once in `.env` (gitignored) to avoid repeating them.
-Build on the same CPU arch as your nodes (e.g. arm64 for a Raspberry Pi) — use
-`docker buildx --platform` if cross-building.
+Set `PUSH_IMAGE` once in `.env` (gitignored) to avoid repeating it. The build
+uses the `ocibuilder` buildx builder (`BUILDER=`), a docker-container one, since
+the default docker driver can't export OCI layouts:
+
+```bash
+docker buildx create --name ocibuilder --driver docker-container --bootstrap
+```
+
+It builds for `linux/arm64` (`PLATFORM=`) and pushes OCI rather than Docker
+manifest v2, which OCI-only registries such as zot reject.
 
 ## Notes
 

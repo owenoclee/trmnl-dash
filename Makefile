@@ -13,11 +13,12 @@ PORT   ?= 8080
 
 SERVER := server
 
-# k3s image delivery (see k8s/README.md). Set DEPLOY_HOST and REGISTRY_CIP in
-# .env, or override: make deploy DEPLOY_HOST=user@node REGISTRY_CIP=10.x.x.x:5000
-DEPLOY_HOST  ?= user@your-k3s-node
-REGISTRY_CIP ?= REGISTRY-CLUSTERIP:5000
-IMAGE        := registry.local/trmnl:latest
+# k3s image delivery (see k8s/README.md). Set PUSH_IMAGE in .env, or override:
+# make deploy PUSH_IMAGE=/path/to/push-image.sh
+PUSH_IMAGE ?= ./push-image.sh
+BUILDER    ?= ocibuilder
+PLATFORM   ?= linux/arm64
+OCI_DIR    := .oci
 
 .PHONY: preview open clean server serve deploy
 
@@ -62,15 +63,18 @@ serve: $(SERVER)
 		$(if $(PHOTO_STRATEGY),--photo-strategy $(PHOTO_STRATEGY),)
 
 clean:
-	rm -f $(OUT) $(VIEWER) $(SERVER) $(SERVER_DEV)
+	rm -rf $(OUT) $(VIEWER) $(SERVER) $(SERVER_DEV) $(OCI_DIR)
 
-# Build the arm64 image and ship it into the cluster's registry, then roll the
-# Flux-managed deployment. The registry is ClusterIP-only, so the push goes via
-# the node: import into its containerd, then push to the registry it can reach.
+# Build the image as an OCI layout, hand it to $(PUSH_IMAGE) <layout> trmnl:latest,
+# then roll the deployment (imagePullPolicy: Always pulls the new latest). OCI
+# rather than `docker save`, because OCI-only registries such as zot reject
+# Docker manifest v2; --provenance=false keeps buildx from wrapping the image in
+# an attestation index the registry won't accept as a tag.
 deploy:
-	docker build -t $(IMAGE) .
-	docker save $(IMAGE) | gzip | ssh $(DEPLOY_HOST) 'gunzip | sudo k3s ctr -n k8s.io images import -'
-	ssh $(DEPLOY_HOST) 'sudo k3s ctr -n k8s.io images tag --force $(IMAGE) $(REGISTRY_CIP)/trmnl:latest \
-		&& sudo k3s ctr -n k8s.io images push --plain-http $(REGISTRY_CIP)/trmnl:latest'
-	ssh $(DEPLOY_HOST) 'sudo k3s kubectl -n trmnl rollout restart deploy/trmnl \
-		&& sudo k3s kubectl -n trmnl rollout status deploy/trmnl'
+	rm -rf $(OCI_DIR) && mkdir -p $(OCI_DIR)
+	docker buildx --builder $(BUILDER) build --platform $(PLATFORM) \
+		--provenance=false --sbom=false --output type=oci,dest=$(OCI_DIR)/img.tar .
+	tar -xf $(OCI_DIR)/img.tar -C $(OCI_DIR) && rm $(OCI_DIR)/img.tar
+	$(PUSH_IMAGE) $(OCI_DIR) trmnl:latest
+	kubectl -n trmnl rollout restart deploy/trmnl
+	kubectl -n trmnl rollout status deploy/trmnl --timeout=5m

@@ -15,14 +15,12 @@ photos/
 *.png
 trmnl-*.html
 devices.json
-# Per-location tide data — never baked into the image (provided at deploy time,
-# e.g. via a ConfigMap). The server reads it from TRMNL_TIDES at render time.
-tides.json
 .env
 .env.example
 
-# Build outputs (the image builds its own binary)
+# Build outputs (the image builds its own binary, and make deploy's OCI layout)
 server
 trmnl
+.oci
 
 .DS_Store
